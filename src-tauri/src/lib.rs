@@ -14,15 +14,16 @@ pub fn run() {
             }
             Ok(())
         })
-        // Tauri commands registered here in later phases
-        // .invoke_handler(tauri::generate_handler![
-        //     commands::kubeconfig::get_kubeconfig_contexts,
-        //     commands::kubeconfig::set_active_context,
-        //     commands::pods::list_pods,
-        //     commands::kubectl::describe_pod,
-        //     commands::logs::get_pod_logs,
-        //     commands::ai::analyze_with_ai,
-        // ])
+        .invoke_handler(tauri::generate_handler![
+            commands::kubeconfig::get_kubeconfig_contexts,
+            commands::kubeconfig::set_active_context,
+            // commands::pods::list_pods,          — Step 6
+            // commands::pods::list_namespaces,     — Step 6
+            // commands::kubectl::describe_pod,     — Step 9
+            // commands::kubectl::run_kubectl,      — Step 13
+            // commands::logs::get_pod_logs,        — Step 9
+            // commands::ai::analyze_with_ai,       — Step 11
+        ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }

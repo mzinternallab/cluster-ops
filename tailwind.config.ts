@@ -39,7 +39,20 @@ const config: Config = {
       },
     },
   },
-  plugins: [],
+  plugins: [
+    // scrollbar-none utility for the cluster tab strip
+    ({ addUtilities }: { addUtilities: (u: Record<string, Record<string, string>>) => void }) => {
+      addUtilities({
+        '.scrollbar-none': {
+          '-ms-overflow-style': 'none',
+          'scrollbar-width': 'none',
+        },
+        '.scrollbar-none::-webkit-scrollbar': {
+          display: 'none',
+        },
+      })
+    },
+  ],
 }
 
 export default config

@@ -1,5 +1,7 @@
 // Kubernetes resource types for cluster-ops
 
+export type ClusterHealth = 'healthy' | 'slow' | 'unreachable' | 'unknown'
+
 export interface KubeContext {
   name: string
   cluster: string

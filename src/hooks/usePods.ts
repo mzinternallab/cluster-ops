@@ -1,7 +1,14 @@
-// Pod list fetching and polling
-// Implemented in Phase 1 Step 6-8
+import { useQuery } from '@tanstack/react-query'
+import { invoke } from '@tauri-apps/api/core'
+import { useNamespaceStore } from '@/store/namespaceStore'
+import type { PodSummary } from '@/types/kubernetes'
 
-export function usePods(_namespace?: string | null) {
-  // TODO: useQuery -> invoke('list_pods', { namespace })
-  return { pods: [], isLoading: false, error: null }
+export function usePods() {
+  const { activeNamespace } = useNamespaceStore()
+
+  return useQuery({
+    queryKey: ['pods', activeNamespace ?? 'all'],
+    queryFn: () => invoke<PodSummary[]>('list_pods', { namespace: activeNamespace }),
+    refetchInterval: 10_000,
+  })
 }

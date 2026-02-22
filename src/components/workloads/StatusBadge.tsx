@@ -1,19 +1,22 @@
-// Status pill component — Phase 1 Step 7
 import { cn } from '@/lib/utils'
-import type { PodStatus } from '@/types/kubernetes'
 
 interface StatusBadgeProps {
-  status: PodStatus | string
+  status: string
 }
 
 const statusColors: Record<string, string> = {
-  Running: 'bg-success/20 text-success',
-  Pending: 'bg-warning/20 text-warning',
-  Terminating: 'bg-orange-500/20 text-orange-400',
-  CrashLoopBackOff: 'bg-error/20 text-error',
-  OOMKilled: 'bg-error/20 text-error',
-  Error: 'bg-error/20 text-error',
-  Completed: 'bg-text-muted/20 text-text-muted',
+  Running:                    'bg-success/20 text-success',
+  Pending:                    'bg-warning/20 text-warning',
+  Terminating:                'bg-orange-500/20 text-orange-400',
+  CrashLoopBackOff:           'bg-error/20 text-error',
+  OOMKilled:                  'bg-error/20 text-error',
+  Error:                      'bg-error/20 text-error',
+  ImagePullBackOff:           'bg-error/20 text-error',
+  ErrImagePull:               'bg-error/20 text-error',
+  CreateContainerConfigError: 'bg-error/20 text-error',
+  InvalidImageName:           'bg-error/20 text-error',
+  Completed:                  'bg-text-muted/20 text-text-muted',
+  Unknown:                    'bg-text-muted/20 text-text-muted',
 }
 
 export function StatusBadge({ status }: StatusBadgeProps) {

@@ -20,9 +20,9 @@ pub fn run() {
             commands::kubeconfig::check_cluster_health,
             commands::pods::list_pods,
             commands::pods::list_namespaces,
-            // commands::kubectl::describe_pod,     — Step 9
+            commands::kubectl::describe_pod,
             // commands::kubectl::run_kubectl,      — Step 13
-            // commands::logs::get_pod_logs,        — Step 9
+            commands::logs::get_pod_logs,
             // commands::ai::analyze_with_ai,       — Step 11
         ])
         .run(tauri::generate_context!())

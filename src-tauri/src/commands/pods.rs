@@ -1,8 +1,12 @@
 use std::collections::HashMap;
+use std::process::Stdio;
 
 use chrono::Utc;
 use k8s_openapi::api::core::v1::{Namespace as K8sNamespace, Pod};
-use kube::{api::ListParams, Api, Client, Config};
+use kube::{api::{DeleteParams, ListParams}, Api, Client, Config};
+use tauri::{AppHandle, Emitter};
+use tokio::io::{AsyncBufReadExt, BufReader};
+use tokio::process::Command;
 
 use crate::models::k8s::PodSummary;
 
@@ -189,4 +193,75 @@ pub async fn list_namespaces() -> Result<Vec<String>, String> {
 
     names.sort();
     Ok(names)
+}
+
+/// Deletes a pod by name and namespace using kube-rs.
+#[tauri::command]
+pub async fn delete_pod(name: String, namespace: String) -> Result<(), String> {
+    let client = build_client().await?;
+    let api: Api<Pod> = Api::namespaced(client, &namespace);
+    api.delete(&name, &DeleteParams::default())
+        .await
+        .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+/// Execs into a pod via kubectl, streaming output line-by-line as Tauri events.
+/// Tries /bin/sh first; falls back to /bin/bash if the first shell exits non-zero.
+///
+/// Events emitted:
+/// - `exec-output` — payload: `String` — one line of stdout
+/// - `exec-error`  — payload: `String` — stderr output
+/// - `exec-done`   — payload: `null`   — stream finished
+#[tauri::command]
+pub async fn exec_into_pod(
+    app: AppHandle,
+    name: String,
+    namespace: String,
+) -> Result<(), String> {
+    let shells = ["/bin/sh", "/bin/bash"];
+
+    for (idx, shell) in shells.iter().enumerate() {
+        let mut child = Command::new("kubectl")
+            .args(["exec", "-i", &name, "-n", &namespace, "--", shell])
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .map_err(|e| format!("kubectl not found: {e}"))?;
+
+        let stdout = child.stdout.take().ok_or("no stdout")?;
+        let mut lines = BufReader::new(stdout).lines();
+
+        while let Some(line) = lines.next_line().await.map_err(|e| e.to_string())? {
+            app.emit("exec-output", line).map_err(|e| e.to_string())?;
+        }
+        drop(lines);
+
+        let output = child.wait_with_output().await.map_err(|e| e.to_string())?;
+        let err_str = String::from_utf8_lossy(&output.stderr);
+        let err_str = err_str.trim();
+
+        if output.status.success() {
+            if !err_str.is_empty() {
+                app.emit("exec-error", err_str).map_err(|e| e.to_string())?;
+            }
+            app.emit("exec-done", ()).map_err(|e| e.to_string())?;
+            return Ok(());
+        }
+
+        // Non-zero exit on first shell — retry with next
+        if idx < shells.len() - 1 {
+            continue;
+        }
+
+        // All shells exhausted — report the error
+        if !err_str.is_empty() {
+            app.emit("exec-error", err_str).map_err(|e| e.to_string())?;
+        }
+        app.emit("exec-done", ()).map_err(|e| e.to_string())?;
+        return Err(format!("exec failed: {err_str}"));
+    }
+
+    app.emit("exec-done", ()).map_err(|e| e.to_string())?;
+    Ok(())
 }

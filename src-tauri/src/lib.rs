@@ -32,6 +32,8 @@ pub fn run() {
             commands::kubeconfig::check_cluster_health,
             commands::pods::list_pods,
             commands::pods::list_namespaces,
+            commands::pods::delete_pod,
+            commands::pods::exec_into_pod,
             commands::kubectl::describe_pod,
             // commands::kubectl::run_kubectl,      — Step 13
             commands::logs::get_pod_logs,

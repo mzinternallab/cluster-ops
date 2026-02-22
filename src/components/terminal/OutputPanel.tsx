@@ -140,7 +140,7 @@ export function OutputPanel() {
           term.writeln(`${RED}${String(err)}${RESET}`)
           setIsStreaming(false)
         })
-    } else {
+    } else if (outputPanelMode === 'logs') {
       // Set up listeners BEFORE invoking so no events are missed
       Promise.all([
         listen<string>('pod-log-line',  (e) => { if (active) term.writeln(highlightLine(e.payload)) }),
@@ -161,6 +161,24 @@ export function OutputPanel() {
           setIsStreaming(false)
         })
       })
+    } else if (outputPanelMode === 'exec') {
+      Promise.all([
+        listen<string>('exec-output', (e) => { if (active) term.writeln(highlightLine(e.payload)) }),
+        listen<string>('exec-error',  (e) => { if (active) term.writeln(`${RED}${e.payload}${RESET}`) }),
+        listen<null>  ('exec-done',   ()  => { if (active) setIsStreaming(false) }),
+      ]).then((uls) => {
+        if (!active) { uls.forEach((fn) => fn()); return }
+        unlistensRef.current = uls
+
+        invoke('exec_into_pod', {
+          name:      selectedPod.name,
+          namespace: selectedPod.namespace,
+        }).catch((err: unknown) => {
+          if (!active) return
+          term.writeln(`${RED}${String(err)}${RESET}`)
+          setIsStreaming(false)
+        })
+      })
     }
 
     return () => {
@@ -173,6 +191,7 @@ export function OutputPanel() {
   // ── Render ────────────────────────────────────────────────────────────────
 
   const isLogs = outputPanelMode === 'logs'
+  const isExec = outputPanelMode === 'exec'
   const title  = selectedPod
     ? `${selectedPod.namespace}/${selectedPod.name}`
     : ''
@@ -186,8 +205,8 @@ export function OutputPanel() {
         {/* Mode badge */}
         <span className={cn(
           'text-xxs font-mono px-1.5 py-0.5 rounded uppercase tracking-wider shrink-0',
-          isLogs
-            ? 'bg-accent/15 text-accent'
+          isLogs ? 'bg-accent/15 text-accent'
+            : isExec ? 'bg-[#1a1a2e] text-[#7a7adc]'
             : 'bg-ai-purple/15 text-ai-purple',
         )}>
           {outputPanelMode ?? 'output'}

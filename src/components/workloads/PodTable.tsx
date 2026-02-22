@@ -14,17 +14,17 @@ type SortDir = 'asc' | 'desc'
 
 // ── Column definitions ────────────────────────────────────────────────────────
 
-const COLUMNS: { key: SortKey | null; label: string; className: string }[] = [
-  { key: 'name',      label: 'NAME',     className: 'min-w-[160px]' },
-  { key: 'namespace', label: 'NAMESPACE',className: 'min-w-[110px]' },
-  { key: 'status',    label: 'STATUS',   className: 'min-w-[130px]' },
-  { key: 'ready',     label: 'READY',    className: 'w-[70px]'      },
-  { key: 'restarts',  label: 'RESTARTS', className: 'w-[80px]'      },
-  { key: 'age',       label: 'AGE',      className: 'w-[65px]'      },
-  { key: null,        label: 'CPU',      className: 'w-[65px]'      },
-  { key: null,        label: 'MEM',      className: 'w-[70px]'      },
-  { key: 'node',      label: 'NODE',     className: 'min-w-[120px]' },
-  { key: null,        label: '',         className: 'w-[60px]'      },
+const COLUMNS: { key: SortKey | null; label: string; className: string; padClass?: string }[] = [
+  { key: 'name',      label: 'NAME',     className: 'min-w-[160px]'                  },
+  { key: 'namespace', label: 'NAMESPACE',className: 'min-w-[110px]'                  },
+  { key: 'status',    label: 'STATUS',   className: 'min-w-[130px]', padClass: 'px-2'},
+  { key: 'ready',     label: 'READY',    className: 'w-[70px]'                       },
+  { key: 'restarts',  label: 'RESTARTS', className: 'w-[80px]'                       },
+  { key: 'age',       label: 'AGE',      className: 'w-[65px]'                       },
+  { key: null,        label: 'CPU',      className: 'w-[65px]'                       },
+  { key: null,        label: 'MEM',      className: 'w-[70px]'                       },
+  { key: 'node',      label: 'NODE',     className: 'min-w-[120px]'                  },
+  { key: null,        label: 'COMMANDS', className: 'w-[160px]'                      },
 ]
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -118,7 +118,8 @@ export function PodTable() {
                   key={col.label || `col-${i}`}
                   onClick={() => handleSort(col.key)}
                   className={cn(
-                    'px-3 py-1.5 text-xxs font-semibold tracking-wider text-text-muted uppercase select-none',
+                    col.padClass ?? 'px-3',
+                    'py-1.5 text-xxs font-semibold tracking-wider text-text-muted uppercase select-none',
                     col.key && 'cursor-pointer hover:text-text-primary',
                     col.className,
                   )}
@@ -153,6 +154,7 @@ export function PodTable() {
                   onSelect={() => setSelectedPod(pod)}
                   onDescribe={() => { setSelectedPod(pod); openOutputPanel('describe') }}
                   onLogs={() => { setSelectedPod(pod); openOutputPanel('logs') }}
+                  onExec={() => { setSelectedPod(pod); openOutputPanel('exec') }}
                 />
               ))
             )}

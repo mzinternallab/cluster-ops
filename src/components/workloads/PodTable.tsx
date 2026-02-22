@@ -3,6 +3,7 @@ import { ChevronUp, ChevronDown, ChevronsUpDown } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { usePods } from '@/hooks/usePods'
 import { useUIStore } from '@/store/uiStore'
+import { useNamespaceStore } from '@/store/namespaceStore'
 import { PodRow } from './PodRow'
 import type { PodSummary } from '@/types/kubernetes'
 
@@ -47,6 +48,9 @@ function SortIcon({ col, sortKey, sortDir }: SortIconProps) {
 export function PodTable() {
   const { data: pods, isLoading, error } = usePods()
   const { selectedPod, setSelectedPod, openOutputPanel } = useUIStore()
+  // Read activeNamespace directly so the client-side filter is applied
+  // immediately — including while keepPreviousData is serving the old list.
+  const activeNamespace = useNamespaceStore((s) => s.activeNamespace)
 
   const [search,  setSearch]  = useState('')
   const [sortKey, setSortKey] = useState<SortKey>('name')
@@ -64,7 +68,14 @@ export function PodTable() {
 
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase()
-    const list = pods ?? []
+    // Start with server-fetched list (or keepPreviousData placeholder)
+    let list = pods ?? []
+    // Client-side namespace filter: applied immediately on every render,
+    // so the correct subset is visible even before the namespaced backend
+    // query completes.
+    if (activeNamespace) {
+      list = list.filter((p) => p.namespace === activeNamespace)
+    }
     const matched = q
       ? list.filter(
           (p) =>
@@ -78,7 +89,7 @@ export function PodTable() {
       const cmp = compareValue(a, b, sortKey)
       return sortDir === 'asc' ? cmp : -cmp
     })
-  }, [pods, search, sortKey, sortDir])
+  }, [pods, activeNamespace, search, sortKey, sortDir])
 
   // ── Loading ────────────────────────────────────────────────────────────────
 

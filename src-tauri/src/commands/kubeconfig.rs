@@ -35,26 +35,71 @@ fn merge_kubeconfig(mut base: Kubeconfig, extra: Kubeconfig) -> Kubeconfig {
     base
 }
 
-/// Loads and merges kubeconfig files from an explicit list of paths.
-/// Paths that do not exist are silently skipped and logged.
-fn load_from_paths(paths: &[PathBuf]) -> Option<Kubeconfig> {
-    let mut merged: Option<Kubeconfig> = None;
-    for path in paths {
-        if !path.exists() {
-            log::warn!("kubeconfig: file not found — {}", path.display());
+/// Returns all regular, non-hidden files in `dir`, sorted alphabetically.
+/// Skips subdirectories and any file whose name begins with '.'.
+fn scan_kube_dir(dir: &std::path::Path) -> Vec<PathBuf> {
+    let mut paths = Vec::new();
+
+    let entries = match std::fs::read_dir(dir) {
+        Ok(e) => e,
+        Err(e) => {
+            log::warn!("kubeconfig: cannot read directory {}: {e}", dir.display());
+            return paths;
+        }
+    };
+
+    for entry in entries.flatten() {
+        let path = entry.path();
+
+        // Skip subdirectories (cache/, http-cache/, etc.)
+        if path.is_dir() {
             continue;
         }
+
+        // Skip hidden files (.DS_Store, .gitconfig, etc.)
+        let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+        if name.starts_with('.') {
+            continue;
+        }
+
+        paths.push(path);
+    }
+
+    // Deterministic ordering so logs are easy to follow
+    paths.sort();
+    paths
+}
+
+/// Tries to load each path as a kubeconfig and merges all that succeed.
+/// Logs every file with its outcome so the full picture is visible in dev console.
+fn load_from_paths(paths: &[PathBuf]) -> Option<Kubeconfig> {
+    let mut merged: Option<Kubeconfig> = None;
+
+    for path in paths {
+        if !path.exists() {
+            log::info!("kubeconfig: skip (not found)     — {}", path.display());
+            continue;
+        }
+
         match Kubeconfig::read_from(path) {
             Ok(cfg) => {
-                log::info!("kubeconfig: loaded {} context(s) from {}", cfg.contexts.len(), path.display());
+                log::info!(
+                    "kubeconfig: ok   ({} context(s))   — {}",
+                    cfg.contexts.len(),
+                    path.display()
+                );
                 merged = Some(match merged.take() {
                     None => cfg,
                     Some(base) => merge_kubeconfig(base, cfg),
                 });
             }
-            Err(e) => log::warn!("kubeconfig: failed to parse {}: {e}", path.display()),
+            Err(e) => {
+                // Not a kubeconfig — expected when scanning all files in ~/.kube
+                log::info!("kubeconfig: skip (parse error: {e}) — {}", path.display());
+            }
         }
     }
+
     merged
 }
 
@@ -64,11 +109,12 @@ fn load_from_paths(paths: &[PathBuf]) -> Option<Kubeconfig> {
 ///
 /// Resolution order:
 /// 1. If KUBECONFIG env var is set, delegate to `Kubeconfig::read()` which merges
-///    every file in the list (same semantics as kubectl).
-/// 2. If KUBECONFIG is unset (common when the Tauri process does not inherit the
-///    shell environment, e.g. launched from a desktop icon on Windows/macOS),
-///    manually load and merge the two known config files:
-///    ~/.kube/config.eagle-i-orc and ~/.kube/config.rovi
+///    every listed file with the same semantics as kubectl.
+/// 2. If KUBECONFIG is unset (common when the Tauri process is launched from a
+///    desktop icon and does not inherit the shell environment), scan ~/.kube for
+///    ALL regular files, attempt to parse each one as a kubeconfig, and merge
+///    every valid result.  This way dropping a new config file into ~/.kube is
+///    enough to make the cluster appear — no env var changes required.
 ///
 /// Returns an empty vec — not an error — when no kubeconfig can be found.
 #[tauri::command]
@@ -77,11 +123,13 @@ pub async fn get_kubeconfig_contexts() -> Result<Vec<KubeContext>, String> {
     log::info!("kubeconfig: KUBECONFIG env = {:?}", kube_env);
 
     let kubeconfig = if !kube_env.is_empty() {
-        // Env var is set — kube-rs read() merges all listed files
+        // ── Env var path ──────────────────────────────────────────────────────
+        // kube-rs Kubeconfig::read() splits KUBECONFIG on ':' / ';', reads each
+        // file, and merges them — identical to what kubectl does.
         match Kubeconfig::read() {
             Ok(cfg) => {
                 log::info!(
-                    "kubeconfig: Kubeconfig::read() found {} context(s)",
+                    "kubeconfig: Kubeconfig::read() merged {} context(s)",
                     cfg.contexts.len()
                 );
                 cfg
@@ -92,8 +140,7 @@ pub async fn get_kubeconfig_contexts() -> Result<Vec<KubeContext>, String> {
             }
         }
     } else {
-        // Env var not set — manually load the known config files
-        log::info!("kubeconfig: KUBECONFIG not set; loading known files manually");
+        // ── Directory-scan fallback ───────────────────────────────────────────
         let home = match dirs::home_dir() {
             Some(h) => h,
             None => {
@@ -101,14 +148,24 @@ pub async fn get_kubeconfig_contexts() -> Result<Vec<KubeContext>, String> {
                 return Ok(vec![]);
             }
         };
-        let paths = vec![
-            home.join(".kube/config.eagle-i-orc"),
-            home.join(".kube/config.rovi"),
-        ];
-        match load_from_paths(&paths) {
+
+        let kube_dir = home.join(".kube");
+        log::info!("kubeconfig: KUBECONFIG not set — scanning {}", kube_dir.display());
+
+        let candidates = scan_kube_dir(&kube_dir);
+        log::info!(
+            "kubeconfig: {} candidate file(s) in {}",
+            candidates.len(),
+            kube_dir.display()
+        );
+
+        match load_from_paths(&candidates) {
             Some(cfg) => cfg,
             None => {
-                log::warn!("kubeconfig: no config files found in fallback paths");
+                log::warn!(
+                    "kubeconfig: no valid kubeconfig files found in {}",
+                    kube_dir.display()
+                );
                 return Ok(vec![]);
             }
         }

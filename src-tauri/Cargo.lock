@@ -81,6 +81,7 @@ version = "0.1.0"
 dependencies = [
  "chrono",
  "dirs",
+ "http",
  "k8s-openapi",
  "kube",
  "log",

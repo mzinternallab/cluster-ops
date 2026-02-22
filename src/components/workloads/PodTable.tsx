@@ -51,8 +51,8 @@ export function PodTable() {
   // Read activeNamespace directly so the client-side filter is applied
   // immediately — including while keepPreviousData is serving the old list.
   const activeNamespace = useNamespaceStore((s) => s.activeNamespace)
+  const podSearch = useNamespaceStore((s) => s.podSearch)
 
-  const [search,  setSearch]  = useState('')
   const [sortKey, setSortKey] = useState<SortKey>('name')
   const [sortDir, setSortDir] = useState<SortDir>('asc')
 
@@ -67,7 +67,7 @@ export function PodTable() {
   }
 
   const filtered = useMemo(() => {
-    const q = search.trim().toLowerCase()
+    const q = podSearch.trim().toLowerCase()
     // Start with server-fetched list (or keepPreviousData placeholder)
     let list = pods ?? []
     // Client-side namespace filter: applied immediately on every render,
@@ -76,20 +76,12 @@ export function PodTable() {
     if (activeNamespace) {
       list = list.filter((p) => p.namespace === activeNamespace)
     }
-    const matched = q
-      ? list.filter(
-          (p) =>
-            p.name.toLowerCase().includes(q) ||
-            p.namespace.toLowerCase().includes(q) ||
-            p.status.toLowerCase().includes(q) ||
-            p.node.toLowerCase().includes(q),
-        )
-      : list
+    const matched = q ? list.filter((p) => p.name.toLowerCase().includes(q)) : list
     return [...matched].sort((a, b) => {
       const cmp = compareValue(a, b, sortKey)
       return sortDir === 'asc' ? cmp : -cmp
     })
-  }, [pods, activeNamespace, search, sortKey, sortDir])
+  }, [pods, activeNamespace, podSearch, sortKey, sortDir])
 
   // ── Loading ────────────────────────────────────────────────────────────────
 
@@ -115,21 +107,6 @@ export function PodTable() {
 
   return (
     <div className="flex flex-col flex-1 overflow-hidden">
-
-      {/* Search bar */}
-      <div className="px-3 py-2 shrink-0 border-b border-border">
-        <input
-          type="text"
-          placeholder="Filter pods…"
-          value={search}
-          onChange={(e) => setSearch(e.target.value)}
-          className={cn(
-            'w-64 h-6 px-2 bg-background border border-border rounded',
-            'text-xs font-mono text-text-primary placeholder:text-text-muted',
-            'focus:outline-none focus:border-accent',
-          )}
-        />
-      </div>
 
       {/* Scrollable table */}
       <div className="flex-1 overflow-auto">
@@ -161,7 +138,7 @@ export function PodTable() {
                   colSpan={COLUMNS.length}
                   className="px-3 py-8 text-center text-text-muted text-xs"
                 >
-                  {search ? 'No pods match your filter.' : 'No pods found in this namespace.'}
+                  {podSearch ? 'No pods match your search.' : 'No pods found in this namespace.'}
                 </td>
               </tr>
             ) : (

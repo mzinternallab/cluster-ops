@@ -8,6 +8,8 @@ export interface KubeContext {
   user: string
   namespace?: string
   isActive: boolean
+  /** API server URL — used for health checks; comes from the clusters stanza */
+  serverUrl?: string
 }
 
 export interface PodSummary {

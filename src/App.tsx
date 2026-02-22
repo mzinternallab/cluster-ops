@@ -8,6 +8,7 @@ import { SecretsView } from '@/views/SecretsView'
 import { NetworkView } from '@/views/NetworkView'
 import { StorageView } from '@/views/StorageView'
 import { useUIStore } from '@/store/uiStore'
+import { useCluster } from '@/hooks/useCluster'
 
 function ActiveView() {
   const { activeView } = useUIStore()
@@ -22,6 +23,8 @@ function ActiveView() {
 
 export default function App() {
   const { outputPanelOpen } = useUIStore()
+  // Load kubeconfig contexts and kick off health checks on startup
+  useCluster()
 
   return (
     <div className="flex flex-col h-screen bg-background text-text-primary overflow-hidden select-none">

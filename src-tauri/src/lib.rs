@@ -17,6 +17,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             commands::kubeconfig::get_kubeconfig_contexts,
             commands::kubeconfig::set_active_context,
+            commands::kubeconfig::check_cluster_health,
             // commands::pods::list_pods,          — Step 6
             // commands::pods::list_namespaces,     — Step 6
             // commands::kubectl::describe_pod,     — Step 9

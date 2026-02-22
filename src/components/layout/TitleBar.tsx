@@ -1,5 +1,6 @@
 import { cn } from '@/lib/utils'
 import { useClusterStore } from '@/store/clusterStore'
+import { switchClusterContext } from '@/hooks/useCluster'
 import type { ClusterHealth, KubeContext } from '@/types/kubernetes'
 import { WindowControls } from './WindowControls'
 
@@ -107,7 +108,13 @@ function NoClusters() {
 // ── TitleBar ──────────────────────────────────────────────────────────────────
 
 export function TitleBar() {
-  const { availableContexts, activeContext, healthMap, setActiveContext } = useClusterStore()
+  const { availableContexts, activeContext, healthMap, setActiveContext, setHealth } =
+    useClusterStore()
+
+  function handleSwitch(ctx: KubeContext) {
+    // Fire-and-forget — persists to kubeconfig and re-pings health
+    switchClusterContext(ctx, setActiveContext, setHealth).catch(console.error)
+  }
 
   return (
     <div
@@ -131,13 +138,13 @@ export function TitleBar() {
               ctx={ctx}
               health={healthMap[ctx.name] ?? 'unknown'}
               isActive={activeContext?.name === ctx.name}
-              onClick={() => setActiveContext(ctx)}
+              onClick={() => handleSwitch(ctx)}
             />
           ))
         )}
       </div>
 
-      {/* Right: window controls — not part of drag region via CSS no-drag on buttons */}
+      {/* Right: window controls */}
       <WindowControls />
     </div>
   )

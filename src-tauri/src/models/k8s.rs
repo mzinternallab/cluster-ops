@@ -10,6 +10,8 @@ pub struct KubeContext {
     pub user: String,
     pub namespace: Option<String>,
     pub is_active: bool,
+    /// API server URL — used for health checks and direct kube-rs client construction
+    pub server_url: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

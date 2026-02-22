@@ -23,17 +23,99 @@ fn primary_kubeconfig_path() -> Option<PathBuf> {
         .or_else(|| dirs::home_dir().map(|h| h.join(".kube").join("config")))
 }
 
+/// Merges `extra` into `base` by extending clusters, auth_infos, and contexts.
+/// `base.current_context` wins; `extra.current_context` is used only if base has none.
+fn merge_kubeconfig(mut base: Kubeconfig, extra: Kubeconfig) -> Kubeconfig {
+    base.clusters.extend(extra.clusters);
+    base.auth_infos.extend(extra.auth_infos);
+    base.contexts.extend(extra.contexts);
+    if base.current_context.is_none() {
+        base.current_context = extra.current_context;
+    }
+    base
+}
+
+/// Loads and merges kubeconfig files from an explicit list of paths.
+/// Paths that do not exist are silently skipped and logged.
+fn load_from_paths(paths: &[PathBuf]) -> Option<Kubeconfig> {
+    let mut merged: Option<Kubeconfig> = None;
+    for path in paths {
+        if !path.exists() {
+            log::warn!("kubeconfig: file not found — {}", path.display());
+            continue;
+        }
+        match Kubeconfig::read_from(path) {
+            Ok(cfg) => {
+                log::info!("kubeconfig: loaded {} context(s) from {}", cfg.contexts.len(), path.display());
+                merged = Some(match merged.take() {
+                    None => cfg,
+                    Some(base) => merge_kubeconfig(base, cfg),
+                });
+            }
+            Err(e) => log::warn!("kubeconfig: failed to parse {}: {e}", path.display()),
+        }
+    }
+    merged
+}
+
 // ── commands ──────────────────────────────────────────────────────────────────
 
-/// Lists all contexts from the merged kubeconfig (KUBECONFIG env + ~/.kube/config).
-/// Also returns the API server URL for each context so the frontend can run health checks.
-/// Returns an empty vec — not an error — when no kubeconfig exists.
+/// Lists all contexts from the merged kubeconfig.
+///
+/// Resolution order:
+/// 1. If KUBECONFIG env var is set, delegate to `Kubeconfig::read()` which merges
+///    every file in the list (same semantics as kubectl).
+/// 2. If KUBECONFIG is unset (common when the Tauri process does not inherit the
+///    shell environment, e.g. launched from a desktop icon on Windows/macOS),
+///    manually load and merge the two known config files:
+///    ~/.kube/config.eagle-i-orc and ~/.kube/config.rovi
+///
+/// Returns an empty vec — not an error — when no kubeconfig can be found.
 #[tauri::command]
 pub async fn get_kubeconfig_contexts() -> Result<Vec<KubeContext>, String> {
-    let kubeconfig = match Kubeconfig::read() {
-        Ok(cfg) => cfg,
-        Err(_) => return Ok(vec![]),
+    let kube_env = std::env::var("KUBECONFIG").unwrap_or_default();
+    log::info!("kubeconfig: KUBECONFIG env = {:?}", kube_env);
+
+    let kubeconfig = if !kube_env.is_empty() {
+        // Env var is set — kube-rs read() merges all listed files
+        match Kubeconfig::read() {
+            Ok(cfg) => {
+                log::info!(
+                    "kubeconfig: Kubeconfig::read() found {} context(s)",
+                    cfg.contexts.len()
+                );
+                cfg
+            }
+            Err(e) => {
+                log::warn!("kubeconfig: Kubeconfig::read() failed: {e}");
+                return Ok(vec![]);
+            }
+        }
+    } else {
+        // Env var not set — manually load the known config files
+        log::info!("kubeconfig: KUBECONFIG not set; loading known files manually");
+        let home = match dirs::home_dir() {
+            Some(h) => h,
+            None => {
+                log::warn!("kubeconfig: cannot determine home directory");
+                return Ok(vec![]);
+            }
+        };
+        let paths = vec![
+            home.join(".kube/config.eagle-i-orc"),
+            home.join(".kube/config.rovi"),
+        ];
+        match load_from_paths(&paths) {
+            Some(cfg) => cfg,
+            None => {
+                log::warn!("kubeconfig: no config files found in fallback paths");
+                return Ok(vec![]);
+            }
+        }
     };
+
+    let ctx_count = kubeconfig.contexts.len();
+    log::info!("kubeconfig: {ctx_count} total context(s) after merge");
 
     let current = kubeconfig.current_context.clone().unwrap_or_default();
 

@@ -1,3 +1,5 @@
+import { useState, useEffect } from 'react'
+import { invoke } from '@tauri-apps/api/core'
 import { TitleBar } from '@/components/layout/TitleBar'
 import { Sidebar } from '@/components/layout/Sidebar'
 import { NamespaceBar } from '@/components/layout/NamespaceBar'
@@ -22,9 +24,10 @@ function ActiveView() {
   }
 }
 
-export default function App() {
+// Rendered only after the kubectl proxy is confirmed up.
+// useCluster() is gated here so no API calls fire before :8001 is listening.
+function AppContent() {
   const { outputPanelOpen } = useUIStore()
-  // Load kubeconfig contexts and kick off health checks on startup
   useCluster()
 
   return (
@@ -66,4 +69,50 @@ export default function App() {
       </div>
     </div>
   )
+}
+
+export default function App() {
+  const [proxyReady, setProxyReady] = useState(false)
+  const [proxyError, setProxyError] = useState<string | null>(null)
+
+  useEffect(() => {
+    // Register cleanup before spawning so it always fires.
+    const cleanup = () => { invoke('stop_kubectl_proxy').catch(() => {}) }
+    window.addEventListener('beforeunload', cleanup)
+
+    invoke('start_kubectl_proxy')
+      .then(() => {
+        // Give kubectl proxy ~400 ms to start listening on :8001.
+        setTimeout(() => setProxyReady(true), 400)
+      })
+      .catch((e: unknown) => {
+        setProxyError(String(e))
+      })
+
+    return () => window.removeEventListener('beforeunload', cleanup)
+  }, [])
+
+  if (proxyError) {
+    return (
+      <div className="flex flex-col h-screen bg-background text-text-primary overflow-hidden select-none">
+        <TitleBar />
+        <div className="flex flex-1 items-center justify-center text-error text-xs font-mono px-8 text-center">
+          kubectl proxy failed to start: {proxyError}
+        </div>
+      </div>
+    )
+  }
+
+  if (!proxyReady) {
+    return (
+      <div className="flex flex-col h-screen bg-background text-text-primary overflow-hidden select-none">
+        <TitleBar />
+        <div className="flex flex-1 items-center justify-center text-text-muted text-xs font-mono">
+          Connecting to cluster…
+        </div>
+      </div>
+    )
+  }
+
+  return <AppContent />
 }

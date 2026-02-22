@@ -1,7 +1,26 @@
 import { useEffect } from 'react'
 import { invoke } from '@tauri-apps/api/core'
 import { useClusterStore } from '@/store/clusterStore'
+import { useNamespaceStore } from '@/store/namespaceStore'
+import { queryClient } from '@/lib/queryClient'
 import type { KubeContext, ClusterHealth } from '@/types/kubernetes'
+
+// ── Namespace loader ───────────────────────────────────────────────────────────
+// Callable outside React components — accesses Zustand store via getState().
+
+async function loadNamespaces() {
+  const { setAvailableNamespaces, setActiveNamespace } = useNamespaceStore.getState()
+  try {
+    const namespaces = await invoke<string[]>('list_namespaces')
+    setAvailableNamespaces(namespaces)
+  } catch {
+    setAvailableNamespaces([])
+  }
+  // Always reset filter so a stale namespace from the previous cluster isn't stuck
+  setActiveNamespace(null)
+}
+
+// ── useCluster ─────────────────────────────────────────────────────────────────
 
 /**
  * Initializes cluster state on app startup.
@@ -10,6 +29,7 @@ import type { KubeContext, ClusterHealth } from '@/types/kubernetes'
  * - Loads all kubeconfig contexts and marks the active one
  * - Kicks off concurrent health checks for every context that has a server URL
  * - Health results stream in independently via setHealth
+ * - Loads namespace list for the active cluster
  */
 export function useCluster() {
   const { setAvailableContexts, setActiveContext, setHealth } = useClusterStore()
@@ -32,6 +52,9 @@ export function useCluster() {
           .then((h) => setHealth(ctx.name, h as ClusterHealth))
           .catch(() => setHealth(ctx.name, 'unreachable'))
       }
+
+      // Load namespace list for the active cluster
+      await loadNamespaces()
     }
 
     init().catch(console.error)
@@ -39,10 +62,13 @@ export function useCluster() {
   }, [])
 }
 
+// ── switchClusterContext ───────────────────────────────────────────────────────
+
 /**
  * Switches to a different cluster context.
  * Persists the change to the kubeconfig file and updates the store.
  * Re-runs a health check for the newly active context.
+ * Reloads the namespace list and invalidates the pod cache.
  */
 export async function switchClusterContext(
   ctx: KubeContext,
@@ -58,4 +84,10 @@ export async function switchClusterContext(
       .then((h) => setHealth(ctx.name, h as ClusterHealth))
       .catch(() => setHealth(ctx.name, 'unreachable'))
   }
+
+  // Reload namespaces for the new cluster and reset the namespace filter.
+  // Then invalidate the pod cache so stale pods from the previous cluster
+  // aren't served during the next polling interval.
+  await loadNamespaces()
+  queryClient.invalidateQueries({ queryKey: ['pods'] })
 }

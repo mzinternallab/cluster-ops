@@ -23,7 +23,8 @@ serde = { version = "1.0", features = ["derive"] }
 log = "0.4"
 tauri = { version = "2.10.0" }
 tauri-plugin-log = "2"
-kube = { version = "0.97.0", default-features = false, features = ["config"] }
+kube = { version = "0.97.0", default-features = false, features = ["config", "client", "rustls-tls"] }
+chrono = { version = "0.4", features = ["serde"] }
 serde_yaml = "0.9.34"
 tokio = { version = "1.49.0", features = ["full"] }
 dirs = "6.0.0"

@@ -18,8 +18,8 @@ pub fn run() {
             commands::kubeconfig::get_kubeconfig_contexts,
             commands::kubeconfig::set_active_context,
             commands::kubeconfig::check_cluster_health,
-            // commands::pods::list_pods,          — Step 6
-            // commands::pods::list_namespaces,     — Step 6
+            commands::pods::list_pods,
+            commands::pods::list_namespaces,
             // commands::kubectl::describe_pod,     — Step 9
             // commands::kubectl::run_kubectl,      — Step 13
             // commands::logs::get_pod_logs,        — Step 9

@@ -6,7 +6,7 @@ use kube::config::Kubeconfig;
 
 use crate::models::k8s::KubeContext;
 
-// ── helpers ───────────────────────────────────────────────────────────────────
+// ── path helpers ──────────────────────────────────────────────────────────────
 
 /// Returns the first kubeconfig file path to use for writes.
 /// Respects KUBECONFIG env var (`:` on Unix, `;` on Windows), then ~/.kube/config.
@@ -22,6 +22,62 @@ fn primary_kubeconfig_path() -> Option<PathBuf> {
         })
         .or_else(|| dirs::home_dir().map(|h| h.join(".kube").join("config")))
 }
+
+/// In WSL2 the `USERPROFILE` env var is inherited from Windows and looks like
+/// `C:\Users\7va`.  This converts it to the equivalent `/mnt/c/Users/7va` path
+/// so we can scan the Windows-side `.kube` directory.
+///
+/// Returns `None` if `USERPROFILE` is unset or does not look like a Windows path.
+fn windows_home_in_wsl() -> Option<PathBuf> {
+    let profile = std::env::var("USERPROFILE").ok()?;
+    let profile = profile.trim();
+
+    // Must start with a drive letter followed by a colon, e.g. "C:"
+    let mut chars = profile.chars();
+    let drive = chars.next()?.to_ascii_lowercase();
+    if chars.next()? != ':' {
+        return None;
+    }
+
+    // Convert the rest of the path: backslashes → forward slashes
+    let rest = profile[2..].replace('\\', "/");
+    let wsl_path = format!("/mnt/{drive}{rest}");
+    eprintln!("[kubeconfig] Windows home (WSL path) = {wsl_path}");
+    Some(PathBuf::from(wsl_path))
+}
+
+/// Builds the list of `.kube` directories to scan.
+/// Always includes `~/.kube`; also includes the Windows user's `.kube` when
+/// running under WSL2 (detected via the USERPROFILE env var).
+fn kube_dirs_to_scan() -> Vec<PathBuf> {
+    let mut dirs = Vec::new();
+
+    // WSL / native Linux home
+    if let Some(home) = dirs::home_dir() {
+        let d = home.join(".kube");
+        eprintln!("[kubeconfig] WSL home kube dir = {}", d.display());
+        if d.is_dir() {
+            dirs.push(d);
+        } else {
+            eprintln!("[kubeconfig]   (does not exist — skipping)");
+        }
+    }
+
+    // Windows-side home when running under WSL2
+    if let Some(win_home) = windows_home_in_wsl() {
+        let d = win_home.join(".kube");
+        eprintln!("[kubeconfig] Windows kube dir   = {}", d.display());
+        if d.is_dir() {
+            dirs.push(d);
+        } else {
+            eprintln!("[kubeconfig]   (does not exist — skipping)");
+        }
+    }
+
+    dirs
+}
+
+// ── kubeconfig merge helpers ──────────────────────────────────────────────────
 
 /// Merges `extra` into `base` by extending clusters, auth_infos, and contexts.
 /// `base.current_context` wins; `extra.current_context` is used only if base has none.
@@ -43,48 +99,41 @@ fn scan_kube_dir(dir: &std::path::Path) -> Vec<PathBuf> {
     let entries = match std::fs::read_dir(dir) {
         Ok(e) => e,
         Err(e) => {
-            log::warn!("kubeconfig: cannot read directory {}: {e}", dir.display());
+            eprintln!("[kubeconfig] ERROR: cannot read {}: {e}", dir.display());
             return paths;
         }
     };
 
     for entry in entries.flatten() {
         let path = entry.path();
-
-        // Skip subdirectories (cache/, http-cache/, etc.)
-        if path.is_dir() {
-            continue;
-        }
-
-        // Skip hidden files (.DS_Store, .gitconfig, etc.)
         let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
-        if name.starts_with('.') {
+
+        if path.is_dir() {
+            eprintln!("[kubeconfig]   DIR  (skipped)    {}", path.display());
             continue;
         }
-
+        if name.starts_with('.') {
+            eprintln!("[kubeconfig]   HIDDEN (skipped) {}", path.display());
+            continue;
+        }
+        eprintln!("[kubeconfig]   FILE (candidate) {}", path.display());
         paths.push(path);
     }
 
-    // Deterministic ordering so logs are easy to follow
     paths.sort();
     paths
 }
 
-/// Tries to load each path as a kubeconfig and merges all that succeed.
-/// Logs every file with its outcome so the full picture is visible in dev console.
+/// Tries to parse each path as a kubeconfig and merges all that succeed.
+/// Every file is logged with its outcome.
 fn load_from_paths(paths: &[PathBuf]) -> Option<Kubeconfig> {
     let mut merged: Option<Kubeconfig> = None;
 
     for path in paths {
-        if !path.exists() {
-            log::info!("kubeconfig: skip (not found)     — {}", path.display());
-            continue;
-        }
-
         match Kubeconfig::read_from(path) {
             Ok(cfg) => {
-                log::info!(
-                    "kubeconfig: ok   ({} context(s))   — {}",
+                eprintln!(
+                    "[kubeconfig]   PARSE ok ({} ctx)  {}",
                     cfg.contexts.len(),
                     path.display()
                 );
@@ -94,8 +143,7 @@ fn load_from_paths(paths: &[PathBuf]) -> Option<Kubeconfig> {
                 });
             }
             Err(e) => {
-                // Not a kubeconfig — expected when scanning all files in ~/.kube
-                log::info!("kubeconfig: skip (parse error: {e}) — {}", path.display());
+                eprintln!("[kubeconfig]   PARSE fail ({e})  {}", path.display());
             }
         }
     }
@@ -103,80 +151,10 @@ fn load_from_paths(paths: &[PathBuf]) -> Option<Kubeconfig> {
     merged
 }
 
-// ── commands ──────────────────────────────────────────────────────────────────
-
-/// Lists all contexts from the merged kubeconfig.
-///
-/// Resolution order:
-/// 1. If KUBECONFIG env var is set, delegate to `Kubeconfig::read()` which merges
-///    every listed file with the same semantics as kubectl.
-/// 2. If KUBECONFIG is unset (common when the Tauri process is launched from a
-///    desktop icon and does not inherit the shell environment), scan ~/.kube for
-///    ALL regular files, attempt to parse each one as a kubeconfig, and merge
-///    every valid result.  This way dropping a new config file into ~/.kube is
-///    enough to make the cluster appear — no env var changes required.
-///
-/// Returns an empty vec — not an error — when no kubeconfig can be found.
-#[tauri::command]
-pub async fn get_kubeconfig_contexts() -> Result<Vec<KubeContext>, String> {
-    let kube_env = std::env::var("KUBECONFIG").unwrap_or_default();
-    log::info!("kubeconfig: KUBECONFIG env = {:?}", kube_env);
-
-    let kubeconfig = if !kube_env.is_empty() {
-        // ── Env var path ──────────────────────────────────────────────────────
-        // kube-rs Kubeconfig::read() splits KUBECONFIG on ':' / ';', reads each
-        // file, and merges them — identical to what kubectl does.
-        match Kubeconfig::read() {
-            Ok(cfg) => {
-                log::info!(
-                    "kubeconfig: Kubeconfig::read() merged {} context(s)",
-                    cfg.contexts.len()
-                );
-                cfg
-            }
-            Err(e) => {
-                log::warn!("kubeconfig: Kubeconfig::read() failed: {e}");
-                return Ok(vec![]);
-            }
-        }
-    } else {
-        // ── Directory-scan fallback ───────────────────────────────────────────
-        let home = match dirs::home_dir() {
-            Some(h) => h,
-            None => {
-                log::warn!("kubeconfig: cannot determine home directory");
-                return Ok(vec![]);
-            }
-        };
-
-        let kube_dir = home.join(".kube");
-        log::info!("kubeconfig: KUBECONFIG not set — scanning {}", kube_dir.display());
-
-        let candidates = scan_kube_dir(&kube_dir);
-        log::info!(
-            "kubeconfig: {} candidate file(s) in {}",
-            candidates.len(),
-            kube_dir.display()
-        );
-
-        match load_from_paths(&candidates) {
-            Some(cfg) => cfg,
-            None => {
-                log::warn!(
-                    "kubeconfig: no valid kubeconfig files found in {}",
-                    kube_dir.display()
-                );
-                return Ok(vec![]);
-            }
-        }
-    };
-
-    let ctx_count = kubeconfig.contexts.len();
-    log::info!("kubeconfig: {ctx_count} total context(s) after merge");
-
+/// Converts a merged `Kubeconfig` into the `Vec<KubeContext>` the frontend needs.
+fn build_contexts(kubeconfig: Kubeconfig) -> Vec<KubeContext> {
     let current = kubeconfig.current_context.clone().unwrap_or_default();
 
-    // Build a cluster-name → server-URL lookup from the clusters stanza
     let cluster_servers: HashMap<String, String> = kubeconfig
         .clusters
         .iter()
@@ -186,7 +164,7 @@ pub async fn get_kubeconfig_contexts() -> Result<Vec<KubeContext>, String> {
         })
         .collect();
 
-    let contexts = kubeconfig
+    kubeconfig
         .contexts
         .into_iter()
         .filter_map(|named| {
@@ -201,7 +179,82 @@ pub async fn get_kubeconfig_contexts() -> Result<Vec<KubeContext>, String> {
                 server_url,
             })
         })
-        .collect();
+        .collect()
+}
+
+// ── commands ──────────────────────────────────────────────────────────────────
+
+/// Lists all contexts from the merged kubeconfig.
+///
+/// Resolution order:
+/// 1. If KUBECONFIG env var is set AND `Kubeconfig::read()` returns at least one
+///    context, use that result (same semantics as kubectl).
+/// 2. Otherwise — KUBECONFIG unset, file missing, or yielding zero contexts —
+///    scan every `.kube` directory that applies:
+///    - `~/.kube`           (WSL/Linux home)
+///    - Windows `%USERPROFILE%\.kube`  (converted to `/mnt/…`, WSL2 only)
+///    Every regular file in those directories is attempted as a kubeconfig.
+///    All valid results are merged.
+#[tauri::command]
+pub async fn get_kubeconfig_contexts() -> Result<Vec<KubeContext>, String> {
+    let kube_env = std::env::var("KUBECONFIG").unwrap_or_default();
+    eprintln!("[kubeconfig] ── get_kubeconfig_contexts ────────────────────────────");
+    eprintln!("[kubeconfig] KUBECONFIG env = {:?}", kube_env);
+    log::info!("kubeconfig: KUBECONFIG env = {:?}", kube_env);
+
+    // ── 1. Try KUBECONFIG env var first ──────────────────────────────────────
+    if !kube_env.is_empty() {
+        match Kubeconfig::read() {
+            Ok(cfg) if !cfg.contexts.is_empty() => {
+                eprintln!("[kubeconfig] KUBECONFIG env: found {} context(s) — done", cfg.contexts.len());
+                log::info!("kubeconfig: KUBECONFIG env yielded {} context(s)", cfg.contexts.len());
+                let contexts = build_contexts(cfg);
+                for c in &contexts {
+                    eprintln!("[kubeconfig]   {:?}  active={}", c.name, c.is_active);
+                }
+                return Ok(contexts);
+            }
+            Ok(_) => {
+                eprintln!("[kubeconfig] KUBECONFIG env: 0 contexts — falling back to dir scan");
+                log::warn!("kubeconfig: KUBECONFIG set but yielded 0 contexts; scanning dirs");
+            }
+            Err(e) => {
+                eprintln!("[kubeconfig] KUBECONFIG env: read failed ({e}) — falling back to dir scan");
+                log::warn!("kubeconfig: KUBECONFIG read failed: {e}; scanning dirs");
+            }
+        }
+    }
+
+    // ── 2. Scan all applicable .kube directories ──────────────────────────────
+    let dirs = kube_dirs_to_scan();
+    if dirs.is_empty() {
+        eprintln!("[kubeconfig] No .kube directories found — returning empty");
+        return Ok(vec![]);
+    }
+
+    let mut all_candidates: Vec<PathBuf> = Vec::new();
+    for dir in &dirs {
+        eprintln!("[kubeconfig] Scanning: {}", dir.display());
+        let files = scan_kube_dir(dir);
+        eprintln!("[kubeconfig]   {} candidate file(s)", files.len());
+        all_candidates.extend(files);
+    }
+
+    eprintln!("[kubeconfig] {} total candidate file(s) across all dirs", all_candidates.len());
+
+    let Some(merged) = load_from_paths(&all_candidates) else {
+        eprintln!("[kubeconfig] No valid kubeconfig files found — returning empty");
+        log::warn!("kubeconfig: no valid kubeconfig files found");
+        return Ok(vec![]);
+    };
+
+    let contexts = build_contexts(merged);
+    eprintln!("[kubeconfig] Returning {} context(s):", contexts.len());
+    for c in &contexts {
+        eprintln!("[kubeconfig]   {:?}  active={}", c.name, c.is_active);
+    }
+    eprintln!("[kubeconfig] ─────────────────────────────────────────────────────");
+    log::info!("kubeconfig: returning {} context(s)", contexts.len());
 
     Ok(contexts)
 }

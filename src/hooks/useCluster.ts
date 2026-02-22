@@ -36,7 +36,17 @@ export function useCluster() {
 
   useEffect(() => {
     async function init() {
-      const contexts = await invoke<KubeContext[]>('get_kubeconfig_contexts')
+      console.log('[useCluster] calling get_kubeconfig_contexts...')
+      let contexts: KubeContext[]
+      try {
+        contexts = await invoke<KubeContext[]>('get_kubeconfig_contexts')
+        console.log('[useCluster] raw response:', contexts)
+        console.log('[useCluster] context count:', contexts.length)
+        contexts.forEach((c) => console.log('[useCluster]  context:', c.name, 'isActive:', c.isActive))
+      } catch (err) {
+        console.error('[useCluster] get_kubeconfig_contexts ERROR:', err)
+        return
+      }
       setAvailableContexts(contexts)
 
       const active = contexts.find((c) => c.isActive)

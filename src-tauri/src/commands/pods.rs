@@ -8,12 +8,14 @@ use crate::models::k8s::PodSummary;
 
 // ── Client ────────────────────────────────────────────────────────────────────
 
-/// Builds a kube Client from the current kubeconfig context.
-/// `Config::infer()` reads KUBECONFIG / ~/.kube/config and respects current-context.
+/// Builds a kube Client that talks to the kubectl proxy on :8001.
+/// kubectl proxy handles all auth (exec plugins, aws-iam-authenticator, kubelogin, etc.)
+/// so kube-rs never needs to run credential plugins itself.
 async fn build_client() -> Result<Client, String> {
-    let config = Config::infer()
-        .await
-        .map_err(|e| format!("kubeconfig error: {e}"))?;
+    let url: http::Uri = "http://127.0.0.1:8001"
+        .parse()
+        .map_err(|e| format!("proxy url: {e}"))?;
+    let config = Config::new(url);
     Client::try_from(config).map_err(|e| format!("client error: {e}"))
 }
 

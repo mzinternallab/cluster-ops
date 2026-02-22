@@ -2,6 +2,7 @@ import { TitleBar } from '@/components/layout/TitleBar'
 import { Sidebar } from '@/components/layout/Sidebar'
 import { NamespaceBar } from '@/components/layout/NamespaceBar'
 import { CommandBar } from '@/components/terminal/CommandBar'
+import { OutputPanel } from '@/components/terminal/OutputPanel'
 import { WorkloadsView } from '@/views/WorkloadsView'
 import { ConfigMapsView } from '@/views/ConfigMapsView'
 import { SecretsView } from '@/views/SecretsView'
@@ -56,8 +57,8 @@ export default function App() {
           {/* Bottom split: output panel + AI panel (Step 10 + 12) */}
           {outputPanelOpen && (
             <div className="flex flex-1 overflow-hidden border-t border-border">
-              {/* OutputPanel — Step 10 */}
-              <div className="flex-1 overflow-hidden bg-background" />
+              <OutputPanel />
+              {/* AI panel — Step 12 */}
             </div>
           )}
 

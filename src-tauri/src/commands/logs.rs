@@ -13,22 +13,21 @@ use tokio::process::Command;
 /// - `pod-log-error` — payload: `String`  — kubectl stderr (on non-zero exit)
 /// - `pod-log-done`  — payload: `null`    — stream finished
 ///
-/// Args map to: `kubectl logs <name> -n <namespace> --tail=<tail> [-f]`
+/// Args map to: `kubectl logs <name> -n <namespace> [--tail=<tail>] [-f]`
+/// `tail: None` omits the `--tail` flag (returns all logs).
 #[tauri::command]
 pub async fn get_pod_logs(
     app: AppHandle,
     name: String,
     namespace: String,
-    tail: u32,
+    tail: Option<u32>,
     follow: bool,
 ) -> Result<(), String> {
-    let mut args = vec![
-        "logs".to_string(),
-        name,
-        "-n".to_string(),
-        namespace,
-        format!("--tail={tail}"),
-    ];
+    let mut args = vec!["logs".to_string(), name, "-n".to_string(), namespace];
+
+    if let Some(n) = tail {
+        args.push(format!("--tail={n}"));
+    }
 
     if follow {
         args.push("-f".to_string());

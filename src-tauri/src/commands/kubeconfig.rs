@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
@@ -25,45 +25,107 @@ fn primary_kubeconfig_path() -> Option<PathBuf> {
 
 // ── commands ──────────────────────────────────────────────────────────────────
 
-/// Lists all contexts from the merged kubeconfig (KUBECONFIG env + ~/.kube/config).
-/// Also returns the API server URL for each context so the frontend can run health checks.
-/// Returns an empty vec — not an error — when no kubeconfig exists.
+/// Lists all contexts found by scanning every file in `~/.kube` whose name
+/// starts with `"config"`.  Each returned `KubeContext` carries a `source_file`
+/// field recording the exact file it was parsed from.
 #[tauri::command]
 pub async fn get_kubeconfig_contexts() -> Result<Vec<KubeContext>, String> {
-    let kubeconfig = match Kubeconfig::read() {
-        Ok(cfg) => cfg,
-        Err(_) => return Ok(vec![]),
-    };
+    let kube_dir = dirs::home_dir()
+        .map(|h| h.join(".kube"))
+        .ok_or_else(|| "Cannot determine home directory".to_string())?;
 
-    let current = kubeconfig.current_context.clone().unwrap_or_default();
+    println!("Scanning ~/.kube directory: {}", kube_dir.display());
 
-    // Build a cluster-name → server-URL lookup from the clusters stanza
-    let cluster_servers: HashMap<String, String> = kubeconfig
-        .clusters
+    // ── collect all files whose name starts with "config" ────────────────────
+    let mut config_files: Vec<PathBuf> = Vec::new();
+    match std::fs::read_dir(&kube_dir) {
+        Ok(entries) => {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.is_dir() {
+                    continue;
+                }
+                let name = path
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .unwrap_or("");
+                if name.starts_with("config") {
+                    println!("Found file: {name}");
+                    config_files.push(path);
+                }
+            }
+        }
+        Err(e) => {
+            println!("Cannot read ~/.kube directory: {e}");
+            return Ok(vec![]);
+        }
+    }
+    config_files.sort();
+
+    // ── parse each file, keeping (path, Kubeconfig) pairs ────────────────────
+    let mut parsed: Vec<(PathBuf, Kubeconfig)> = Vec::new();
+    for path in &config_files {
+        let filename = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+        match Kubeconfig::read_from(path) {
+            Ok(cfg) => {
+                println!("Parsed {} contexts from {filename}", cfg.contexts.len());
+                parsed.push((path.clone(), cfg));
+            }
+            Err(e) => {
+                println!("Failed to parse {filename}: {e}");
+            }
+        }
+    }
+
+    if parsed.is_empty() {
+        println!("Total contexts found: 0");
+        return Ok(vec![]);
+    }
+
+    // ── determine active context (first file that declares one wins) ──────────
+    let current = parsed
         .iter()
+        .find_map(|(_, cfg)| cfg.current_context.as_ref())
+        .cloned()
+        .unwrap_or_default();
+
+    // ── build cluster → server URL map across all files ───────────────────────
+    let cluster_servers: HashMap<String, String> = parsed
+        .iter()
+        .flat_map(|(_, cfg)| cfg.clusters.iter())
         .filter_map(|nc| {
             let server = nc.cluster.as_ref()?.server.clone()?;
             Some((nc.name.clone(), server))
         })
         .collect();
 
-    let contexts = kubeconfig
-        .contexts
-        .into_iter()
-        .filter_map(|named| {
-            let ctx = named.context?;
+    // ── emit one KubeContext per unique context name, tagged with source file ──
+    let mut seen: HashSet<String> = HashSet::new();
+    let mut contexts: Vec<KubeContext> = Vec::new();
+
+    for (path, cfg) in &parsed {
+        let source = path.to_string_lossy().into_owned();
+        for named in &cfg.contexts {
+            if !seen.insert(named.name.clone()) {
+                continue; // duplicate name — first file wins
+            }
+            let Some(ctx) = named.context.as_ref() else {
+                continue;
+            };
             let server_url = cluster_servers.get(&ctx.cluster).cloned();
-            Some(KubeContext {
+            contexts.push(KubeContext {
                 name: named.name.clone(),
-                cluster: ctx.cluster,
-                user: ctx.user.unwrap_or_default(),
-                namespace: ctx.namespace,
+                cluster: ctx.cluster.clone(),
+                user: ctx.user.clone().unwrap_or_default(),
+                namespace: ctx.namespace.clone(),
                 is_active: named.name == current,
                 server_url,
-            })
-        })
-        .collect();
+                source_file: Some(source.clone()),
+            });
+        }
+    }
 
+    println!("Total contexts found: {}", contexts.len());
     Ok(contexts)
 }
 

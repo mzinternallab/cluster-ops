@@ -12,6 +12,8 @@ pub struct KubeContext {
     pub is_active: bool,
     /// API server URL — used for health checks and direct kube-rs client construction
     pub server_url: Option<String>,
+    /// Absolute path of the kubeconfig file that contains this context
+    pub source_file: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

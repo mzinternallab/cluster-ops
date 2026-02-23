@@ -12,35 +12,45 @@ use tokio::process::Command;
 /// - `pod-log-line`  — payload: `String`  — one line of output
 /// - `pod-log-error` — payload: `String`  — kubectl stderr (on non-zero exit)
 /// - `pod-log-done`  — payload: `null`    — stream finished
-///
-/// Args map to: `kubectl logs <name> -n <namespace> [--tail=<tail>] [-f]`
-/// `tail: None` omits the `--tail` flag (returns all logs).
 #[tauri::command]
 pub async fn get_pod_logs(
     app: AppHandle,
     name: String,
     namespace: String,
+    source_file: String,
+    context_name: String,
     tail: Option<u32>,
     follow: bool,
 ) -> Result<(), String> {
-    let mut args = vec!["logs".to_string(), name, "-n".to_string(), namespace];
+    let kubectl = which::which("kubectl")
+        .map(|p| p.to_string_lossy().to_string())
+        .unwrap_or_else(|_| "kubectl".to_string());
+
+    let mut args = vec![
+        "logs".to_string(),
+        name,
+        "-n".to_string(),
+        namespace,
+        format!("--kubeconfig={source_file}"),
+        format!("--context={context_name}"),
+    ];
 
     if let Some(n) = tail {
         args.push(format!("--tail={n}"));
     }
-
     if follow {
         args.push("-f".to_string());
     }
 
-    let mut child = Command::new("kubectl")
+    eprintln!("[logs] {} {}", kubectl, args.join(" "));
+
+    let mut child = Command::new(&kubectl)
         .args(&args)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
         .map_err(|e| format!("kubectl not found: {e}"))?;
 
-    // Stream stdout line-by-line
     let stdout = child.stdout.take().ok_or("no stdout")?;
     let mut lines = BufReader::new(stdout).lines();
 
@@ -48,10 +58,8 @@ pub async fn get_pod_logs(
         app.emit("pod-log-line", line).map_err(|e| e.to_string())?;
     }
 
-    // Drop the stdout handle before waiting so the pipe is fully closed
     drop(lines);
 
-    // Wait for process exit; collect stderr for error reporting
     let output = child.wait_with_output().await.map_err(|e| e.to_string())?;
 
     if !output.status.success() {

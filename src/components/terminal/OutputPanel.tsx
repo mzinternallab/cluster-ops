@@ -8,6 +8,7 @@ import '@xterm/xterm/css/xterm.css'
 
 import { cn } from '@/lib/utils'
 import { useUIStore } from '@/store/uiStore'
+import { useClusterStore } from '@/store/clusterStore'
 
 // ── ANSI helpers ──────────────────────────────────────────────────────────────
 
@@ -63,6 +64,7 @@ const TERM_THEME = {
 
 export function OutputPanel() {
   const { selectedPod, outputPanelMode, closeOutputPanel } = useUIStore()
+  const activeContext = useClusterStore((s) => s.activeContext)
 
   const containerRef = useRef<HTMLDivElement>(null)
   const termRef      = useRef<Terminal | null>(null)
@@ -127,8 +129,10 @@ export function OutputPanel() {
 
     if (outputPanelMode === 'describe') {
       invoke<string>('describe_pod', {
-        name:      selectedPod.name,
-        namespace: selectedPod.namespace,
+        name:        selectedPod.name,
+        namespace:   selectedPod.namespace,
+        sourceFile:  activeContext?.sourceFile  ?? '',
+        contextName: activeContext?.contextName ?? '',
       })
         .then((output) => {
           if (!active) return
@@ -151,9 +155,11 @@ export function OutputPanel() {
         unlistensRef.current = uls
 
         invoke('get_pod_logs', {
-          name:      selectedPod.name,
-          namespace: selectedPod.namespace,
-          tail:      tailLines,
+          name:        selectedPod.name,
+          namespace:   selectedPod.namespace,
+          sourceFile:  activeContext?.sourceFile  ?? '',
+          contextName: activeContext?.contextName ?? '',
+          tail:        tailLines,
           follow,
         }).catch((err: unknown) => {
           if (!active) return
@@ -171,8 +177,10 @@ export function OutputPanel() {
         unlistensRef.current = uls
 
         invoke('exec_into_pod', {
-          name:      selectedPod.name,
-          namespace: selectedPod.namespace,
+          name:        selectedPod.name,
+          namespace:   selectedPod.namespace,
+          sourceFile:  activeContext?.sourceFile  ?? '',
+          contextName: activeContext?.contextName ?? '',
         }).catch((err: unknown) => {
           if (!active) return
           term.writeln(`${RED}${String(err)}${RESET}`)

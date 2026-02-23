@@ -2,11 +2,31 @@ use tokio::process::Command;
 
 // ── describe_pod ──────────────────────────────────────────────────────────────
 
-/// Runs `kubectl describe pod <name> -n <namespace>` and returns the full output.
+/// Runs `kubectl describe pod <name> -n <namespace>` against the specific
+/// kubeconfig file and context for the active cluster.
 #[tauri::command]
-pub async fn describe_pod(name: String, namespace: String) -> Result<String, String> {
-    let output = Command::new("kubectl")
-        .args(["describe", "pod", &name, "-n", &namespace])
+pub async fn describe_pod(
+    name: String,
+    namespace: String,
+    source_file: String,
+    context_name: String,
+) -> Result<String, String> {
+    let kubectl = which::which("kubectl")
+        .map(|p| p.to_string_lossy().to_string())
+        .unwrap_or_else(|_| "kubectl".to_string());
+
+    eprintln!(
+        "[describe] {} describe pod {name} -n {namespace} --kubeconfig={source_file} --context={context_name}",
+        kubectl
+    );
+
+    let output = Command::new(&kubectl)
+        .args([
+            "describe", "pod", &name,
+            "-n", &namespace,
+            &format!("--kubeconfig={source_file}"),
+            &format!("--context={context_name}"),
+        ])
         .output()
         .await
         .map_err(|e| format!("kubectl not found: {e}"))?;
@@ -21,8 +41,6 @@ pub async fn describe_pod(name: String, namespace: String) -> Result<String, Str
 
 // ── run_kubectl ───────────────────────────────────────────────────────────────
 
-/// Runs an arbitrary kubectl command and streams output via Tauri events.
-/// Implemented in Phase 1 Step 13.
 #[tauri::command]
 pub async fn run_kubectl(_command: String) -> Result<(), String> {
     // TODO: implement in Phase 1 Step 13

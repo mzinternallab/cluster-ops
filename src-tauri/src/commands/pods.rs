@@ -218,12 +218,28 @@ pub async fn exec_into_pod(
     app: AppHandle,
     name: String,
     namespace: String,
+    source_file: String,
+    context_name: String,
 ) -> Result<(), String> {
+    let kubectl = which::which("kubectl")
+        .map(|p| p.to_string_lossy().to_string())
+        .unwrap_or_else(|_| "kubectl".to_string());
+
     let shells = ["/bin/sh", "/bin/bash"];
 
     for (idx, shell) in shells.iter().enumerate() {
-        let mut child = Command::new("kubectl")
-            .args(["exec", "-i", &name, "-n", &namespace, "--", shell])
+        eprintln!(
+            "[exec] {} exec -i {name} -n {namespace} --kubeconfig={source_file} --context={context_name} -- {shell}",
+            kubectl
+        );
+
+        let mut child = Command::new(&kubectl)
+            .args([
+                "exec", "-i", &name, "-n", &namespace,
+                &format!("--kubeconfig={source_file}"),
+                &format!("--context={context_name}"),
+                "--", shell,
+            ])
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .spawn()

@@ -212,10 +212,11 @@ pub async fn delete_pod(name: String, namespace: String) -> Result<(), String> {
 
 /// Execs into a pod via kubectl with a pipe-based interactive shell.
 ///
-/// Spawns `kubectl exec -i … -- /bin/sh -c "exec /bin/sh"` with stdin/stdout/stderr
-/// all piped.  Stdout and stderr are streamed line-by-line to the frontend via
-/// Tauri events.  The frontend sends keystrokes back via `send_exec_input`, which
-/// writes to the stdin pipe stored in EXEC_STDIN.
+/// Spawns `kubectl exec -i … -- /bin/sh` with stdin/stdout/stderr all piped.
+/// Immediately writes PS1 setup and an `echo ready` probe to stdin so the shell
+/// produces visible output without a PTY.  Stdout and stderr are streamed
+/// line-by-line to the frontend via Tauri events.  The frontend sends keystrokes
+/// back via `send_exec_input`.
 ///
 /// Events emitted:
 /// - `exec-output` — payload: String — one stdout line
@@ -235,7 +236,7 @@ pub async fn exec_into_pod(
 
     eprintln!(
         "[exec] {kubectl} exec -i {name} -n {namespace} \
-         --kubeconfig={source_file} --context={context_name} -- /bin/sh -c 'exec /bin/sh'"
+         --kubeconfig={source_file} --context={context_name} -- /bin/sh"
     );
 
     let mut child = Command::new(&kubectl)
@@ -243,7 +244,7 @@ pub async fn exec_into_pod(
             "exec", "-i", &name, "-n", &namespace,
             &format!("--kubeconfig={source_file}"),
             &format!("--context={context_name}"),
-            "--", "/bin/sh", "-c", "exec /bin/sh",
+            "--", "/bin/sh",
         ])
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -251,8 +252,13 @@ pub async fn exec_into_pod(
         .spawn()
         .map_err(|e| format!("kubectl not found: {e}"))?;
 
+    // Write init commands before storing stdin so the shell produces a prompt.
+    let mut stdin = child.stdin.take().ok_or("no stdin")?;
+    stdin.write_all(b"export PS1='$ '\n").map_err(|e| format!("stdin init: {e}"))?;
+    stdin.write_all(b"echo ready\n").map_err(|e| format!("stdin init: {e}"))?;
+    stdin.flush().map_err(|e| format!("stdin flush: {e}"))?;
+
     // Store stdin so send_exec_input can forward keystrokes to the shell.
-    let stdin = child.stdin.take().ok_or("no stdin")?;
     {
         let mut guard = EXEC_STDIN.lock().map_err(|e| e.to_string())?;
         *guard = Some(stdin);
@@ -286,14 +292,15 @@ pub async fn exec_into_pod(
     Ok(())
 }
 
-/// Forwards keystrokes from xterm.js to the running exec session's stdin pipe.
-/// Translates CR → LF so shells receive proper Unix line endings without a PTY.
+/// Forwards input from xterm.js to the running exec session's stdin pipe.
+/// Writes the raw input bytes followed by a newline so the shell processes
+/// each command immediately.
 #[tauri::command]
 pub async fn send_exec_input(input: String) -> Result<(), String> {
-    let input = input.replace('\r', "\n");
     let mut guard = EXEC_STDIN.lock().map_err(|e| e.to_string())?;
     if let Some(ref mut stdin) = *guard {
         stdin.write_all(input.as_bytes()).map_err(|e| format!("stdin write: {e}"))?;
+        stdin.write_all(b"\n").map_err(|e| format!("stdin newline: {e}"))?;
         stdin.flush().map_err(|e| format!("stdin flush: {e}"))?;
     }
     Ok(())

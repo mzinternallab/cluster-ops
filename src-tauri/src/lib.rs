@@ -34,6 +34,7 @@ pub fn run() {
             commands::pods::list_namespaces,
             commands::pods::delete_pod,
             commands::pods::exec_into_pod,
+            commands::pods::send_exec_input,
             commands::kubectl::describe_pod,
             // commands::kubectl::run_kubectl,      — Step 13
             commands::logs::get_pod_logs,

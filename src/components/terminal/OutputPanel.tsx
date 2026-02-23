@@ -9,6 +9,7 @@ import '@xterm/xterm/css/xterm.css'
 import { cn } from '@/lib/utils'
 import { useUIStore } from '@/store/uiStore'
 import { useClusterStore } from '@/store/clusterStore'
+import { ExecPanel } from './ExecPanel'
 
 // ── ANSI helpers ──────────────────────────────────────────────────────────────
 
@@ -125,6 +126,10 @@ export function OutputPanel() {
     stopListeners()
 
     term.clear()
+
+    // exec mode is handled entirely by ExecPanel — skip the data-load here
+    if (outputPanelMode === 'exec') return
+
     setIsStreaming(true)
 
     if (outputPanelMode === 'describe') {
@@ -161,26 +166,6 @@ export function OutputPanel() {
           contextName: activeContext?.contextName ?? '',
           tail:        tailLines,
           follow,
-        }).catch((err: unknown) => {
-          if (!active) return
-          term.writeln(`${RED}${String(err)}${RESET}`)
-          setIsStreaming(false)
-        })
-      })
-    } else if (outputPanelMode === 'exec') {
-      Promise.all([
-        listen<string>('exec-output', (e) => { if (active) term.writeln(highlightLine(e.payload)) }),
-        listen<string>('exec-error',  (e) => { if (active) term.writeln(`${RED}${e.payload}${RESET}`) }),
-        listen<null>  ('exec-done',   ()  => { if (active) setIsStreaming(false) }),
-      ]).then((uls) => {
-        if (!active) { uls.forEach((fn) => fn()); return }
-        unlistensRef.current = uls
-
-        invoke('exec_into_pod', {
-          name:        selectedPod.name,
-          namespace:   selectedPod.namespace,
-          sourceFile:  activeContext?.sourceFile  ?? '',
-          contextName: activeContext?.contextName ?? '',
         }).catch((err: unknown) => {
           if (!active) return
           term.writeln(`${RED}${String(err)}${RESET}`)
@@ -280,8 +265,15 @@ export function OutputPanel() {
         </button>
       </div>
 
-      {/* xterm.js container */}
-      <div ref={containerRef} className="flex-1 overflow-hidden" style={{ padding: '4px 8px' }} />
+      {/* xterm.js container — hidden during exec so the terminal stays initialized */}
+      <div
+        ref={containerRef}
+        className={cn('flex-1 overflow-hidden', isExec && 'hidden')}
+        style={{ padding: '4px 8px' }}
+      />
+
+      {/* ExecPanel renders its own terminal for interactive exec */}
+      {isExec && <ExecPanel />}
     </div>
   )
 }

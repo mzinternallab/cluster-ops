@@ -1,14 +1,18 @@
 use std::collections::HashMap;
-use std::process::Stdio;
+use std::io::{BufRead, BufReader, Write};
+use std::process::{ChildStdin, Command, Stdio};
+use std::sync::Mutex;
 
 use chrono::Utc;
 use k8s_openapi::api::core::v1::{Namespace as K8sNamespace, Pod};
 use kube::{api::{DeleteParams, ListParams}, Api, Client, Config};
 use tauri::{AppHandle, Emitter};
-use tokio::io::{AsyncBufReadExt, BufReader};
-use tokio::process::Command;
 
 use crate::models::k8s::PodSummary;
+
+// Holds the stdin pipe of the running exec session.
+// Replaced each time exec_into_pod is called; written by send_exec_input.
+static EXEC_STDIN: Mutex<Option<ChildStdin>> = Mutex::new(None);
 
 // ── Client ────────────────────────────────────────────────────────────────────
 
@@ -206,13 +210,17 @@ pub async fn delete_pod(name: String, namespace: String) -> Result<(), String> {
     Ok(())
 }
 
-/// Execs into a pod via kubectl, streaming output line-by-line as Tauri events.
-/// Tries /bin/sh first; falls back to /bin/bash if the first shell exits non-zero.
+/// Execs into a pod via kubectl with a pipe-based interactive shell.
+///
+/// Spawns `kubectl exec -i … -- /bin/sh -c "exec /bin/sh"` with stdin/stdout/stderr
+/// all piped.  Stdout and stderr are streamed line-by-line to the frontend via
+/// Tauri events.  The frontend sends keystrokes back via `send_exec_input`, which
+/// writes to the stdin pipe stored in EXEC_STDIN.
 ///
 /// Events emitted:
-/// - `exec-output` — payload: `String` — one line of stdout
-/// - `exec-error`  — payload: `String` — stderr output
-/// - `exec-done`   — payload: `null`   — stream finished
+/// - `exec-output` — payload: String — one stdout line
+/// - `exec-error`  — payload: String — one stderr line
+/// - `exec-done`   — payload: null   — session ended
 #[tauri::command]
 pub async fn exec_into_pod(
     app: AppHandle,
@@ -225,59 +233,68 @@ pub async fn exec_into_pod(
         .map(|p| p.to_string_lossy().to_string())
         .unwrap_or_else(|_| "kubectl".to_string());
 
-    let shells = ["/bin/sh", "/bin/bash"];
+    eprintln!(
+        "[exec] {kubectl} exec -i {name} -n {namespace} \
+         --kubeconfig={source_file} --context={context_name} -- /bin/sh -c 'exec /bin/sh'"
+    );
 
-    for (idx, shell) in shells.iter().enumerate() {
-        eprintln!(
-            "[exec] {} exec -i {name} -n {namespace} --kubeconfig={source_file} --context={context_name} -- {shell}",
-            kubectl
-        );
+    let mut child = Command::new(&kubectl)
+        .args([
+            "exec", "-i", &name, "-n", &namespace,
+            &format!("--kubeconfig={source_file}"),
+            &format!("--context={context_name}"),
+            "--", "/bin/sh", "-c", "exec /bin/sh",
+        ])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|e| format!("kubectl not found: {e}"))?;
 
-        let mut child = Command::new(&kubectl)
-            .args([
-                "exec", "-i", &name, "-n", &namespace,
-                &format!("--kubeconfig={source_file}"),
-                &format!("--context={context_name}"),
-                "--", shell,
-            ])
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()
-            .map_err(|e| format!("kubectl not found: {e}"))?;
-
-        let stdout = child.stdout.take().ok_or("no stdout")?;
-        let mut lines = BufReader::new(stdout).lines();
-
-        while let Some(line) = lines.next_line().await.map_err(|e| e.to_string())? {
-            app.emit("exec-output", line).map_err(|e| e.to_string())?;
-        }
-        drop(lines);
-
-        let output = child.wait_with_output().await.map_err(|e| e.to_string())?;
-        let err_str = String::from_utf8_lossy(&output.stderr);
-        let err_str = err_str.trim();
-
-        if output.status.success() {
-            if !err_str.is_empty() {
-                app.emit("exec-error", err_str).map_err(|e| e.to_string())?;
-            }
-            app.emit("exec-done", ()).map_err(|e| e.to_string())?;
-            return Ok(());
-        }
-
-        // Non-zero exit on first shell — retry with next
-        if idx < shells.len() - 1 {
-            continue;
-        }
-
-        // All shells exhausted — report the error
-        if !err_str.is_empty() {
-            app.emit("exec-error", err_str).map_err(|e| e.to_string())?;
-        }
-        app.emit("exec-done", ()).map_err(|e| e.to_string())?;
-        return Err(format!("exec failed: {err_str}"));
+    // Store stdin so send_exec_input can forward keystrokes to the shell.
+    let stdin = child.stdin.take().ok_or("no stdin")?;
+    {
+        let mut guard = EXEC_STDIN.lock().map_err(|e| e.to_string())?;
+        *guard = Some(stdin);
     }
 
-    app.emit("exec-done", ()).map_err(|e| e.to_string())?;
+    let stdout = child.stdout.take().ok_or("no stdout")?;
+    let stderr = child.stderr.take().ok_or("no stderr")?;
+
+    // Stream stdout in a blocking thread — emit each line as an event.
+    let app_stdout = app.clone();
+    let stdout_task = tokio::task::spawn_blocking(move || {
+        for line in BufReader::new(stdout).lines().flatten() {
+            let _ = app_stdout.emit("exec-output", line);
+        }
+    });
+
+    // Stream stderr in a blocking thread — emit each line as an event.
+    let app_stderr = app.clone();
+    let stderr_task = tokio::task::spawn_blocking(move || {
+        for line in BufReader::new(stderr).lines().flatten() {
+            let _ = app_stderr.emit("exec-error", line);
+        }
+    });
+
+    // Once both readers finish (process exited), signal the frontend.
+    tokio::spawn(async move {
+        let _ = tokio::join!(stdout_task, stderr_task);
+        let _ = app.emit("exec-done", ());
+    });
+
+    Ok(())
+}
+
+/// Forwards keystrokes from xterm.js to the running exec session's stdin pipe.
+/// Translates CR → LF so shells receive proper Unix line endings without a PTY.
+#[tauri::command]
+pub async fn send_exec_input(input: String) -> Result<(), String> {
+    let input = input.replace('\r', "\n");
+    let mut guard = EXEC_STDIN.lock().map_err(|e| e.to_string())?;
+    if let Some(ref mut stdin) = *guard {
+        stdin.write_all(input.as_bytes()).map_err(|e| format!("stdin write: {e}"))?;
+        stdin.flush().map_err(|e| format!("stdin flush: {e}"))?;
+    }
     Ok(())
 }

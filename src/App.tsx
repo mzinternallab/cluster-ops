@@ -11,7 +11,9 @@ import { SecretsView } from '@/views/SecretsView'
 import { NetworkView } from '@/views/NetworkView'
 import { StorageView } from '@/views/StorageView'
 import { useUIStore } from '@/store/uiStore'
+import { useClusterStore } from '@/store/clusterStore'
 import { useCluster } from '@/hooks/useCluster'
+import type { KubeContext } from '@/types/kubernetes'
 
 function ActiveView() {
   const { activeView } = useUIStore()
@@ -72,24 +74,37 @@ function AppContent() {
 }
 
 export default function App() {
-  const [proxyReady, setProxyReady] = useState(false)
+  const { proxyReady, setProxyReady } = useClusterStore()
   const [proxyError, setProxyError] = useState<string | null>(null)
 
   useEffect(() => {
-    // Register cleanup before spawning so it always fires.
     const cleanup = () => { invoke('stop_kubectl_proxy').catch(() => {}) }
     window.addEventListener('beforeunload', cleanup)
 
-    invoke('start_kubectl_proxy')
-      .then(() => {
-        // Give kubectl proxy ~400 ms to start listening on :8001.
-        setTimeout(() => setProxyReady(true), 400)
-      })
-      .catch((e: unknown) => {
-        setProxyError(String(e))
-      })
+    async function init() {
+      // Load contexts first so we can pass the active context name to the proxy.
+      // This lets kubectl proxy use the correct --context from startup, rather
+      // than relying on whatever current-context the merged kubeconfig happens
+      // to have set.
+      let activeContextName: string | undefined
+      try {
+        const contexts = await invoke<KubeContext[]>('get_kubeconfig_contexts')
+        activeContextName = contexts.find((c) => c.isActive)?.name
+      } catch {
+        // Non-fatal: fall through and start proxy without explicit context.
+      }
+
+      await invoke('start_kubectl_proxy',
+        activeContextName ? { context: activeContextName } : {},
+      )
+
+      setProxyReady(true)
+    }
+
+    init().catch((e: unknown) => setProxyError(String(e)))
 
     return () => window.removeEventListener('beforeunload', cleanup)
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
   if (proxyError) {

@@ -4,3 +4,4 @@ pub mod kubectl;
 pub mod logs;
 pub mod proxy;
 pub mod ai;
+pub mod exec;

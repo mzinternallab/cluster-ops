@@ -110,22 +110,32 @@ pub async fn start_pty_exec(
     // Background thread: read raw PTY bytes and emit them as events.
     let app_clone = app.clone();
     std::thread::spawn(move || {
+        eprintln!("[pty-read] reader thread started");
         let mut reader = reader;
         let mut buf = [0u8; 4096];
         loop {
             match reader.read(&mut buf) {
-                Ok(0) => break,
+                Ok(0) => {
+                    eprintln!("[pty-read] EOF (read 0 bytes) — exiting");
+                    break;
+                }
                 Ok(n) => {
+                    eprintln!("[pty-read] got {n} bytes");
                     // Send raw bytes as a lossy UTF-8 string so xterm.js receives
                     // ANSI escape sequences unchanged.
                     let data = String::from_utf8_lossy(&buf[..n]).to_string();
                     if app_clone.emit("pty-output", data).is_err() {
+                        eprintln!("[pty-read] emit error — exiting");
                         break;
                     }
                 }
-                Err(_) => break,
+                Err(e) => {
+                    eprintln!("[pty-read] read error: {e} — exiting");
+                    break;
+                }
             }
         }
+        eprintln!("[pty-read] thread done, emitting pty-done");
         let _ = app_clone.emit("pty-done", ());
     });
 

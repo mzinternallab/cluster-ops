@@ -116,8 +116,11 @@ export function OutputPanel() {
   useEffect(() => {
     const term = termRef.current
     if (!term || !selectedPod || !outputPanelMode) return
-    // exec mode is handled entirely by ExecPanel — nothing to do here.
-    if (outputPanelMode === 'exec') return
+    // exec mode is handled entirely by ExecPanel — just clear any leftover state.
+    if (outputPanelMode === 'exec') {
+      setIsStreaming(false)
+      return
+    }
 
     // Cancel any previous stream and remove listeners
     let active = true

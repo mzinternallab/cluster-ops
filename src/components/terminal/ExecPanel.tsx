@@ -63,6 +63,7 @@ export function ExecPanel() {
     term.loadAddon(fit)
     term.open(el)
     fit.fit()
+    term.focus()
 
     termRef.current = term
     fitRef.current  = fit
@@ -82,12 +83,14 @@ export function ExecPanel() {
     let active = true
     const unlisten: (() => void)[] = []
 
+    term.write(`\x1b[2mConnecting to ${selectedPod.namespace}/${selectedPod.name}...\x1b[0m\r\n`)
+
     Promise.all([
       listen<string>('pty-output', (e) => {
         if (active) term.write(e.payload)
       }),
       listen<null>('pty-done', () => {
-        if (active) term.writeln('\r\n\x1b[2m[session ended]\x1b[0m')
+        if (active) term.write('\r\n\x1b[2m[session ended]\x1b[0m\r\n')
       }),
     ]).then((fns) => {
       if (!active) { fns.forEach((f) => f()); return }
@@ -104,7 +107,9 @@ export function ExecPanel() {
         cols:        dims.cols,
         rows:        dims.rows,
       }).catch((err: unknown) => {
-        if (active) term.writeln(`\r\n\x1b[31m${String(err)}\x1b[0m`)
+        if (active) {
+          term.write(`\r\n\x1b[31mError: ${String(err)}\x1b[0m\r\n`)
+        }
       })
     })
 

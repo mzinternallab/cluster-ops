@@ -1,11 +1,9 @@
 import { useState, useMemo } from 'react'
 import { ChevronUp, ChevronDown, ChevronsUpDown } from 'lucide-react'
-import { invoke } from '@tauri-apps/api/core'
 import { cn } from '@/lib/utils'
 import { usePods } from '@/hooks/usePods'
 import { useUIStore } from '@/store/uiStore'
 import { useNamespaceStore } from '@/store/namespaceStore'
-import { useClusterStore } from '@/store/clusterStore'
 import { PodRow } from './PodRow'
 import type { PodSummary } from '@/types/kubernetes'
 
@@ -50,7 +48,6 @@ function SortIcon({ col, sortKey, sortDir }: SortIconProps) {
 export function PodTable() {
   const { data: pods, isLoading, error } = usePods()
   const { selectedPod, setSelectedPod, openOutputPanel } = useUIStore()
-  const activeContext = useClusterStore((s) => s.activeContext)
   // Read activeNamespace directly so the client-side filter is applied
   // immediately — including while keepPreviousData is serving the old list.
   const activeNamespace = useNamespaceStore((s) => s.activeNamespace)
@@ -157,14 +154,7 @@ export function PodTable() {
                   onSelect={() => setSelectedPod(pod)}
                   onDescribe={() => { setSelectedPod(pod); openOutputPanel('describe') }}
                   onLogs={() => { setSelectedPod(pod); openOutputPanel('logs') }}
-                  onExec={() => {
-                    invoke('exec_into_pod', {
-                      name:        pod.name,
-                      namespace:   pod.namespace,
-                      sourceFile:  activeContext?.sourceFile  ?? '',
-                      contextName: activeContext?.contextName ?? '',
-                    }).catch(console.error)
-                  }}
+                  onExec={() => { setSelectedPod(pod); openOutputPanel('exec') }}
                 />
               ))
             )}

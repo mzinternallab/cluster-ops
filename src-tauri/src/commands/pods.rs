@@ -1,8 +1,10 @@
 use std::collections::HashMap;
+use std::io::{Read, Write};
 
 use chrono::Utc;
 use k8s_openapi::api::core::v1::{Namespace as K8sNamespace, Pod};
 use kube::{api::{DeleteParams, ListParams}, Api, Client, Config};
+use tauri::{AppHandle, Emitter, State};
 
 use crate::models::k8s::PodSummary;
 
@@ -202,72 +204,114 @@ pub async fn delete_pod(name: String, namespace: String) -> Result<(), String> {
     Ok(())
 }
 
-/// Opens the user's native terminal with `kubectl exec -it` running inside it.
-/// Tries /bin/sh first; if that exits non-zero the shell falls back to /bin/bash
-/// (both are chained with `;` so the terminal stays open for the user to see any
-/// error before closing).
+/// Opens a PTY, spawns `kubectl exec -it` inside it, and streams raw PTY output
+/// to the frontend via `exec-output` events.  The frontend's xterm.js terminal
+/// writes bytes directly to the PTY master via the `send_exec_input` command,
+/// giving a fully interactive shell session inside the app.
 ///
-/// Platform behaviour:
-///   Windows  — Windows Terminal (`wt`) if available, otherwise `cmd /C start`
-///   macOS    — Terminal.app via osascript
-///   Linux    — First available of gnome-terminal, xterm, konsole, xfce4-terminal
+/// Events emitted:
+///   `exec-output` — payload: String  — raw PTY bytes (ANSI sequences included)
+///   `exec-done`   — payload: null    — session ended
 #[tauri::command]
 pub async fn exec_into_pod(
+    app: AppHandle,
     name: String,
     namespace: String,
     source_file: String,
     context_name: String,
+    state: State<'_, crate::PtyState>,
 ) -> Result<(), String> {
     let kubectl = which::which("kubectl")
         .map(|p| p.to_string_lossy().to_string())
         .unwrap_or_else(|_| "kubectl".to_string());
 
-    let exec_args = format!(
-        "{kubectl} exec -it {name} -n {namespace} --kubeconfig={source_file} --context={context_name} -- /bin/sh ; {kubectl} exec -it {name} -n {namespace} --kubeconfig={source_file} --context={context_name} -- /bin/bash",
+    eprintln!(
+        "[exec] {kubectl} exec -it {name} -n {namespace} \
+         --kubeconfig={source_file} --context={context_name} -- /bin/sh"
     );
 
-    #[cfg(target_os = "windows")]
+    let pty_system = portable_pty::native_pty_system();
+
+    let pty_pair = pty_system
+        .openpty(portable_pty::PtySize {
+            rows: 24,
+            cols: 80,
+            pixel_width: 0,
+            pixel_height: 0,
+        })
+        .map_err(|e| e.to_string())?;
+
+    let mut cmd = portable_pty::CommandBuilder::new(&kubectl);
+    cmd.args([
+        "exec", "-it", &name, "-n", &namespace,
+        &format!("--kubeconfig={source_file}"),
+        &format!("--context={context_name}"),
+        "--", "/bin/sh",
+    ]);
+
+    // Spawn kubectl exec inside the slave PTY.  slave is consumed here;
+    // kubectl inherits the slave file descriptors so they stay open.
+    let _child = pty_pair
+        .slave
+        .spawn_command(cmd)
+        .map_err(|e| format!("failed to spawn kubectl exec: {e}"))?;
+
+    // Get reader and writer from the master side.
+    let reader = pty_pair
+        .master
+        .try_clone_reader()
+        .map_err(|e| format!("failed to clone PTY reader: {e}"))?;
+
+    let writer = pty_pair
+        .master
+        .take_writer()
+        .map_err(|e| format!("failed to take PTY writer: {e}"))?;
+
+    // Store writer in managed state so send_exec_input can reach it.
     {
-        let wt = which::which("wt").is_ok();
-        if wt {
-            std::process::Command::new("wt")
-                .args(["new-tab", "--", "cmd", "/K", &exec_args])
-                .spawn()
-                .map_err(|e| e.to_string())?;
-        } else {
-            std::process::Command::new("cmd")
-                .args(["/C", "start", "cmd", "/K", &exec_args])
-                .spawn()
-                .map_err(|e| e.to_string())?;
+        let mut guard = state.0.lock().map_err(|e| e.to_string())?;
+        *guard = Some(writer);
+    }
+
+    // Background thread: read PTY bytes and emit them as events.
+    // spawn_blocking because Read::read is synchronous.
+    let app_clone = app.clone();
+    tokio::task::spawn_blocking(move || {
+        let mut reader = reader;
+        let mut buf = [0u8; 1024];
+        loop {
+            match reader.read(&mut buf) {
+                Ok(0) => break,
+                Ok(n) => {
+                    let data = String::from_utf8_lossy(&buf[..n]).to_string();
+                    if app_clone.emit("exec-output", data).is_err() {
+                        break;
+                    }
+                }
+                Err(_) => break,
+            }
         }
+        let _ = app_clone.emit("exec-done", ());
+    });
+
+    Ok(())
+}
+
+/// Forwards raw keystroke bytes from xterm.js to the PTY master writer.
+/// Called on every xterm.js `onData` event.
+#[tauri::command]
+pub async fn send_exec_input(
+    input: String,
+    state: State<'_, crate::PtyState>,
+) -> Result<(), String> {
+    let mut guard = state.0.lock().map_err(|e| e.to_string())?;
+    if let Some(ref mut writer) = *guard {
+        writer
+            .write_all(input.as_bytes())
+            .map_err(|e| format!("PTY write error: {e}"))?;
+        writer
+            .flush()
+            .map_err(|e| format!("PTY flush error: {e}"))?;
     }
-
-    #[cfg(target_os = "macos")]
-    {
-        std::process::Command::new("osascript")
-            .args([
-                "-e",
-                &format!(
-                    "tell app \"Terminal\" to do script \"{}\"",
-                    exec_args
-                ),
-            ])
-            .spawn()
-            .map_err(|e| e.to_string())?;
-    }
-
-    #[cfg(target_os = "linux")]
-    {
-        let terminals = ["gnome-terminal", "xterm", "konsole", "xfce4-terminal"];
-        let term = terminals.iter()
-            .find(|t| which::which(t).is_ok())
-            .ok_or("No terminal emulator found")?;
-
-        std::process::Command::new(term)
-            .args(["--", "bash", "-c", &exec_args])
-            .spawn()
-            .map_err(|e| e.to_string())?;
-    }
-
     Ok(())
 }

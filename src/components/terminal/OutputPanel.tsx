@@ -9,6 +9,7 @@ import '@xterm/xterm/css/xterm.css'
 import { cn } from '@/lib/utils'
 import { useUIStore } from '@/store/uiStore'
 import { useClusterStore } from '@/store/clusterStore'
+import { ExecPanel } from './ExecPanel'
 
 // ── ANSI helpers ──────────────────────────────────────────────────────────────
 
@@ -115,6 +116,8 @@ export function OutputPanel() {
   useEffect(() => {
     const term = termRef.current
     if (!term || !selectedPod || !outputPanelMode) return
+    // exec is handled by ExecPanel which mounts/unmounts with the mode switch.
+    if (outputPanelMode === 'exec') { setIsStreaming(false); return }
 
     // Cancel any previous stream and remove listeners
     let active = true
@@ -179,6 +182,7 @@ export function OutputPanel() {
   // ── Render ────────────────────────────────────────────────────────────────
 
   const isLogs = outputPanelMode === 'logs'
+  const isExec = outputPanelMode === 'exec'
   const title  = selectedPod
     ? `${selectedPod.namespace}/${selectedPod.name}`
     : ''
@@ -193,6 +197,7 @@ export function OutputPanel() {
         <span className={cn(
           'text-xxs font-mono px-1.5 py-0.5 rounded uppercase tracking-wider shrink-0',
           isLogs ? 'bg-accent/15 text-accent'
+            : isExec ? 'bg-[#1a1a2e] text-[#7a7adc]'
             : 'bg-ai-purple/15 text-ai-purple',
         )}>
           {outputPanelMode ?? 'output'}
@@ -258,8 +263,11 @@ export function OutputPanel() {
         </button>
       </div>
 
-      {/* xterm.js container */}
-      <div ref={containerRef} className="flex-1 overflow-hidden" style={{ padding: '4px 8px' }} />
+      {/* Terminal area: dedicated interactive ExecPanel for exec mode */}
+      {isExec
+        ? <ExecPanel />
+        : <div ref={containerRef} className="flex-1 overflow-hidden" style={{ padding: '4px 8px' }} />
+      }
     </div>
   )
 }

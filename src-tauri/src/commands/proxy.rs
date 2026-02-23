@@ -26,6 +26,7 @@ pub async fn start_kubectl_proxy(
     let mut args = vec![
         "proxy".to_string(),
         "--port=8001".to_string(),
+        "--append-server-path".to_string(),
         "--disable-filter=true".to_string(),
     ];
 

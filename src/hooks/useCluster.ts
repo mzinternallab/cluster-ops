@@ -24,12 +24,11 @@ async function loadNamespaces() {
 
 /**
  * Initializes cluster state on app startup.
- * Call once at the root of the component tree (App.tsx → AppContent).
- * By the time this runs, App.tsx has already started kubectl proxy and
- * set proxyReady = true, so API calls to :8001 are safe.
+ * Call once at the root of the component tree (App.tsx).
  *
  * - Loads all kubeconfig contexts and marks the active one
  * - Kicks off concurrent health checks for every context that has a server URL
+ * - Health results stream in independently via setHealth
  * - Loads namespace list for the active cluster
  */
 export function useCluster() {
@@ -67,53 +66,28 @@ export function useCluster() {
 
 /**
  * Switches to a different cluster context.
- *
- * 1. Shows the "Connecting to cluster…" screen by setting proxyReady = false.
- * 2. Restarts kubectl proxy with the new context (Rust sleeps 1500 ms before
- *    returning, so the proxy is listening by the time we proceed).
- * 3. Reloads the namespace list and invalidates the pod cache.
- * 4. Marks the proxy as ready again so the main UI is shown.
- *
- * set_active_context writes current-context to the primary kubeconfig file
- * (best-effort — non-fatal if the file doesn't exist on the current system).
+ * Persists the change to the kubeconfig file and updates the store.
+ * Re-runs a health check for the newly active context.
+ * Reloads the namespace list and invalidates the pod cache.
  */
 export async function switchClusterContext(
   ctx: KubeContext,
   setActiveContext: (ctx: KubeContext) => void,
   setHealth: (name: string, health: ClusterHealth) => void,
 ) {
-  const { setProxyReady } = useClusterStore.getState()
+  await invoke('set_active_context', { contextName: ctx.name })
+  setActiveContext(ctx)
 
-  // Show "Connecting to cluster…" while the proxy restarts.
-  setProxyReady(false)
-
-  try {
-    // Persist the context choice to the kubeconfig file (best-effort).
-    invoke('set_active_context', { contextName: ctx.name }).catch(() => {
-      // Non-fatal: the file may not exist on this machine.
-    })
-
-    // Restart kubectl proxy pointed at the new context.
-    // The Rust command kills the old proxy, spawns a new one, and waits
-    // 1500 ms for it to start before resolving.
-    await invoke('start_kubectl_proxy', { context: ctx.name, kubeconfigFile: ctx.kubeconfigFile })
-
-    setActiveContext(ctx)
-
-    // Re-ping health for the newly active context.
-    if (ctx.serverUrl) {
-      setHealth(ctx.name, 'unknown')
-      invoke<string>('check_cluster_health', { serverUrl: ctx.serverUrl })
-        .then((h) => setHealth(ctx.name, h as ClusterHealth))
-        .catch(() => setHealth(ctx.name, 'unreachable'))
-    }
-
-    // Reload namespaces for the new cluster and reset the namespace filter.
-    // Invalidate the pod cache so stale pods from the previous cluster are gone.
-    await loadNamespaces()
-    queryClient.invalidateQueries({ queryKey: ['pods'] })
-  } finally {
-    // Always restore the UI — even if something above threw.
-    setProxyReady(true)
+  if (ctx.serverUrl) {
+    setHealth(ctx.name, 'unknown') // show "checking" while pinging
+    invoke<string>('check_cluster_health', { serverUrl: ctx.serverUrl })
+      .then((h) => setHealth(ctx.name, h as ClusterHealth))
+      .catch(() => setHealth(ctx.name, 'unreachable'))
   }
+
+  // Reload namespaces for the new cluster and reset the namespace filter.
+  // Then invalidate the pod cache so stale pods from the previous cluster
+  // aren't served during the next polling interval.
+  await loadNamespaces()
+  queryClient.invalidateQueries({ queryKey: ['pods'] })
 }

@@ -1,10 +1,12 @@
 use std::collections::HashMap;
-use std::io::{Read, Write};
+use std::process::Stdio;
 
 use chrono::Utc;
 use k8s_openapi::api::core::v1::{Namespace as K8sNamespace, Pod};
 use kube::{api::{DeleteParams, ListParams}, Api, Client, Config};
-use tauri::{AppHandle, Emitter, State};
+use tauri::{AppHandle, Emitter};
+use tokio::io::{AsyncBufReadExt, BufReader};
+use tokio::process::Command;
 
 use crate::models::k8s::PodSummary;
 
@@ -204,14 +206,13 @@ pub async fn delete_pod(name: String, namespace: String) -> Result<(), String> {
     Ok(())
 }
 
-/// Opens a PTY, spawns `kubectl exec -it` inside it, and streams raw PTY output
-/// to the frontend via `exec-output` events.  The frontend's xterm.js terminal
-/// writes bytes directly to the PTY master via the `send_exec_input` command,
-/// giving a fully interactive shell session inside the app.
+/// Execs into a pod via kubectl, streaming output line-by-line as Tauri events.
+/// Tries /bin/sh first; falls back to /bin/bash if the first shell exits non-zero.
 ///
 /// Events emitted:
-///   `exec-output` — payload: String  — raw PTY bytes (ANSI sequences included)
-///   `exec-done`   — payload: null    — session ended
+/// - `exec-output` — payload: `String` — one line of stdout
+/// - `exec-error`  — payload: `String` — stderr output
+/// - `exec-done`   — payload: `null`   — stream finished
 #[tauri::command]
 pub async fn exec_into_pod(
     app: AppHandle,
@@ -219,99 +220,64 @@ pub async fn exec_into_pod(
     namespace: String,
     source_file: String,
     context_name: String,
-    state: State<'_, crate::PtyState>,
 ) -> Result<(), String> {
     let kubectl = which::which("kubectl")
         .map(|p| p.to_string_lossy().to_string())
         .unwrap_or_else(|_| "kubectl".to_string());
 
-    eprintln!(
-        "[exec] {kubectl} exec -it {name} -n {namespace} \
-         --kubeconfig={source_file} --context={context_name} -- /bin/sh"
-    );
+    let shells = ["/bin/sh", "/bin/bash"];
 
-    let pty_system = portable_pty::native_pty_system();
+    for (idx, shell) in shells.iter().enumerate() {
+        eprintln!(
+            "[exec] {} exec -i {name} -n {namespace} --kubeconfig={source_file} --context={context_name} -- {shell}",
+            kubectl
+        );
 
-    let pty_pair = pty_system
-        .openpty(portable_pty::PtySize {
-            rows: 24,
-            cols: 80,
-            pixel_width: 0,
-            pixel_height: 0,
-        })
-        .map_err(|e| e.to_string())?;
+        let mut child = Command::new(&kubectl)
+            .args([
+                "exec", "-i", &name, "-n", &namespace,
+                &format!("--kubeconfig={source_file}"),
+                &format!("--context={context_name}"),
+                "--", shell,
+            ])
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .map_err(|e| format!("kubectl not found: {e}"))?;
 
-    let mut cmd = portable_pty::CommandBuilder::new(&kubectl);
-    cmd.args([
-        "exec", "-it", &name, "-n", &namespace,
-        &format!("--kubeconfig={source_file}"),
-        &format!("--context={context_name}"),
-        "--", "/bin/sh",
-    ]);
+        let stdout = child.stdout.take().ok_or("no stdout")?;
+        let mut lines = BufReader::new(stdout).lines();
 
-    // Spawn kubectl exec inside the slave PTY.  slave is consumed here;
-    // kubectl inherits the slave file descriptors so they stay open.
-    let _child = pty_pair
-        .slave
-        .spawn_command(cmd)
-        .map_err(|e| format!("failed to spawn kubectl exec: {e}"))?;
-
-    // Get reader and writer from the master side.
-    let reader = pty_pair
-        .master
-        .try_clone_reader()
-        .map_err(|e| format!("failed to clone PTY reader: {e}"))?;
-
-    let writer = pty_pair
-        .master
-        .take_writer()
-        .map_err(|e| format!("failed to take PTY writer: {e}"))?;
-
-    // Store writer in managed state so send_exec_input can reach it.
-    {
-        let mut guard = state.0.lock().map_err(|e| e.to_string())?;
-        *guard = Some(writer);
-    }
-
-    // Background thread: read PTY bytes and emit them as events.
-    // spawn_blocking because Read::read is synchronous.
-    let app_clone = app.clone();
-    tokio::task::spawn_blocking(move || {
-        let mut reader = reader;
-        let mut buf = [0u8; 1024];
-        loop {
-            match reader.read(&mut buf) {
-                Ok(0) => break,
-                Ok(n) => {
-                    let data = String::from_utf8_lossy(&buf[..n]).to_string();
-                    if app_clone.emit("exec-output", data).is_err() {
-                        break;
-                    }
-                }
-                Err(_) => break,
-            }
+        while let Some(line) = lines.next_line().await.map_err(|e| e.to_string())? {
+            app.emit("exec-output", line).map_err(|e| e.to_string())?;
         }
-        let _ = app_clone.emit("exec-done", ());
-    });
+        drop(lines);
 
-    Ok(())
-}
+        let output = child.wait_with_output().await.map_err(|e| e.to_string())?;
+        let err_str = String::from_utf8_lossy(&output.stderr);
+        let err_str = err_str.trim();
 
-/// Forwards raw keystroke bytes from xterm.js to the PTY master writer.
-/// Called on every xterm.js `onData` event.
-#[tauri::command]
-pub async fn send_exec_input(
-    input: String,
-    state: State<'_, crate::PtyState>,
-) -> Result<(), String> {
-    let mut guard = state.0.lock().map_err(|e| e.to_string())?;
-    if let Some(ref mut writer) = *guard {
-        writer
-            .write_all(input.as_bytes())
-            .map_err(|e| format!("PTY write error: {e}"))?;
-        writer
-            .flush()
-            .map_err(|e| format!("PTY flush error: {e}"))?;
+        if output.status.success() {
+            if !err_str.is_empty() {
+                app.emit("exec-error", err_str).map_err(|e| e.to_string())?;
+            }
+            app.emit("exec-done", ()).map_err(|e| e.to_string())?;
+            return Ok(());
+        }
+
+        // Non-zero exit on first shell — retry with next
+        if idx < shells.len() - 1 {
+            continue;
+        }
+
+        // All shells exhausted — report the error
+        if !err_str.is_empty() {
+            app.emit("exec-error", err_str).map_err(|e| e.to_string())?;
+        }
+        app.emit("exec-done", ()).map_err(|e| e.to_string())?;
+        return Err(format!("exec failed: {err_str}"));
     }
+
+    app.emit("exec-done", ()).map_err(|e| e.to_string())?;
     Ok(())
 }

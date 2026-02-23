@@ -9,7 +9,6 @@ import '@xterm/xterm/css/xterm.css'
 import { cn } from '@/lib/utils'
 import { useUIStore } from '@/store/uiStore'
 import { useClusterStore } from '@/store/clusterStore'
-import { ExecPanel } from './ExecPanel'
 
 // ── ANSI helpers ──────────────────────────────────────────────────────────────
 
@@ -116,8 +115,6 @@ export function OutputPanel() {
   useEffect(() => {
     const term = termRef.current
     if (!term || !selectedPod || !outputPanelMode) return
-    // exec is handled by ExecPanel which mounts/unmounts with the mode switch.
-    if (outputPanelMode === 'exec') { setIsStreaming(false); return }
 
     // Cancel any previous stream and remove listeners
     let active = true
@@ -164,6 +161,26 @@ export function OutputPanel() {
           contextName: activeContext?.contextName ?? '',
           tail:        tailLines,
           follow,
+        }).catch((err: unknown) => {
+          if (!active) return
+          term.writeln(`${RED}${String(err)}${RESET}`)
+          setIsStreaming(false)
+        })
+      })
+    } else if (outputPanelMode === 'exec') {
+      Promise.all([
+        listen<string>('exec-output', (e) => { if (active) term.writeln(highlightLine(e.payload)) }),
+        listen<string>('exec-error',  (e) => { if (active) term.writeln(`${RED}${e.payload}${RESET}`) }),
+        listen<null>  ('exec-done',   ()  => { if (active) setIsStreaming(false) }),
+      ]).then((uls) => {
+        if (!active) { uls.forEach((fn) => fn()); return }
+        unlistensRef.current = uls
+
+        invoke('exec_into_pod', {
+          name:        selectedPod.name,
+          namespace:   selectedPod.namespace,
+          sourceFile:  activeContext?.sourceFile  ?? '',
+          contextName: activeContext?.contextName ?? '',
         }).catch((err: unknown) => {
           if (!active) return
           term.writeln(`${RED}${String(err)}${RESET}`)
@@ -263,11 +280,8 @@ export function OutputPanel() {
         </button>
       </div>
 
-      {/* Terminal area: dedicated interactive ExecPanel for exec mode */}
-      {isExec
-        ? <ExecPanel />
-        : <div ref={containerRef} className="flex-1 overflow-hidden" style={{ padding: '4px 8px' }} />
-      }
+      {/* xterm.js container */}
+      <div ref={containerRef} className="flex-1 overflow-hidden" style={{ padding: '4px 8px' }} />
     </div>
   )
 }

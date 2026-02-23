@@ -10,6 +10,8 @@ export interface KubeContext {
   isActive: boolean
   /** API server URL — used for health checks; comes from the clusters stanza */
   serverUrl?: string
+  /** Absolute path of the kubeconfig file that owns this context */
+  sourceFile?: string
 }
 
 export interface PodSummary {

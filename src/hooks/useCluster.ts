@@ -75,19 +75,25 @@ export async function switchClusterContext(
   setActiveContext: (ctx: KubeContext) => void,
   setHealth: (name: string, health: ClusterHealth) => void,
 ) {
+  // Persist the selection to the kubeconfig file.
   await invoke('set_active_context', { contextName: ctx.name })
   setActiveContext(ctx)
 
+  // Kick off health check fire-and-forget.
   if (ctx.serverUrl) {
-    setHealth(ctx.name, 'unknown') // show "checking" while pinging
+    setHealth(ctx.name, 'unknown')
     invoke<string>('check_cluster_health', { serverUrl: ctx.serverUrl })
       .then((h) => setHealth(ctx.name, h as ClusterHealth))
       .catch(() => setHealth(ctx.name, 'unreachable'))
   }
 
-  // Reload namespaces for the new cluster and reset the namespace filter.
-  // Then invalidate the pod cache so stale pods from the previous cluster
-  // aren't served during the next polling interval.
+  // Restart proxy pointed at the single kubeconfig file that owns this context.
+  // Wait for it to succeed before fetching namespaces or pods.
+  await invoke('start_kubectl_proxy', {
+    sourceFile: ctx.sourceFile,
+    context: ctx.name,
+  })
+
   await loadNamespaces()
   queryClient.invalidateQueries({ queryKey: ['pods'] })
 }

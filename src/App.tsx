@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react'
 import { invoke } from '@tauri-apps/api/core'
+import type { KubeContext } from '@/types/kubernetes'
 import { TitleBar } from '@/components/layout/TitleBar'
 import { Sidebar } from '@/components/layout/Sidebar'
 import { NamespaceBar } from '@/components/layout/NamespaceBar'
@@ -76,19 +77,29 @@ export default function App() {
   const [proxyError, setProxyError] = useState<string | null>(null)
 
   useEffect(() => {
-    // Register cleanup before spawning so it always fires.
     const cleanup = () => { invoke('stop_kubectl_proxy').catch(() => {}) }
     window.addEventListener('beforeunload', cleanup)
 
-    invoke('start_kubectl_proxy')
-      .then(() => {
-        // Give kubectl proxy ~400 ms to start listening on :8001.
-        setTimeout(() => setProxyReady(true), 400)
-      })
-      .catch((e: unknown) => {
-        setProxyError(String(e))
-      })
+    async function init() {
+      // Load contexts first so we can pass the active context's source file to
+      // the proxy — a single-file --kubeconfig avoids path-separator issues.
+      let sourceFile: string | undefined
+      let context: string | undefined
+      try {
+        const contexts = await invoke<KubeContext[]>('get_kubeconfig_contexts')
+        const active = contexts.find((c) => c.isActive)
+        sourceFile = active?.sourceFile
+        context = active?.name
+      } catch {
+        // Non-fatal: proxy will start without --kubeconfig / --context.
+      }
 
+      await invoke('start_kubectl_proxy', { sourceFile, context })
+      // Give kubectl proxy ~400 ms to start listening on :8001.
+      setTimeout(() => setProxyReady(true), 400)
+    }
+
+    init().catch((e: unknown) => setProxyError(String(e)))
     return () => window.removeEventListener('beforeunload', cleanup)
   }, [])
 

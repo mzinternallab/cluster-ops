@@ -5,8 +5,6 @@ use std::process::Child;
 use std::sync::{Arc, Mutex};
 use tauri::Manager;
 
-use commands::exec::PtySession;
-
 /// Holds the kubectl proxy child process so it can be killed on exit.
 /// Arc lets us clone out of the tauri State borrow inside the RunEvent::Exit handler.
 pub struct KubectlProxy(pub Arc<Mutex<Option<Child>>>);
@@ -25,8 +23,6 @@ pub fn run() {
 
             // Proxy starts as None — the frontend calls start_kubectl_proxy on mount.
             app.manage(KubectlProxy(Arc::new(Mutex::new(None))));
-            // PTY session starts as None — the frontend calls start_pty_exec when entering exec mode.
-            app.manage(PtySession(Arc::new(Mutex::new(None))));
 
             Ok(())
         })
@@ -43,10 +39,6 @@ pub fn run() {
             commands::logs::get_pod_logs,
             commands::proxy::start_kubectl_proxy,
             commands::proxy::stop_kubectl_proxy,
-            commands::exec::start_pty_exec,
-            commands::exec::send_exec_input,
-            commands::exec::resize_pty,
-            commands::exec::stop_pty_exec,
             // commands::ai::analyze_with_ai,       — Step 11
         ])
         .build(tauri::generate_context!())
@@ -58,13 +50,6 @@ pub fn run() {
                 if let Ok(mut guard) = arc.lock() {
                     if let Some(mut child) = guard.take() {
                         let _ = child.kill();
-                    }
-                };
-                // Kill any active PTY session.
-                let pty_arc = app_handle.state::<PtySession>().0.clone();
-                if let Ok(mut guard) = pty_arc.lock() {
-                    if let Some(mut session) = guard.take() {
-                        let _ = session.child.kill();
                     }
                 };
             }

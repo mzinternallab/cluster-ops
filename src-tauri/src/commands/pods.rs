@@ -1,12 +1,8 @@
 use std::collections::HashMap;
-use std::process::Stdio;
 
 use chrono::Utc;
 use k8s_openapi::api::core::v1::{Namespace as K8sNamespace, Pod};
 use kube::{api::{DeleteParams, ListParams}, Api, Client, Config};
-use tauri::{AppHandle, Emitter};
-use tokio::io::{AsyncBufReadExt, BufReader};
-use tokio::process::Command;
 
 use crate::models::k8s::PodSummary;
 
@@ -206,16 +202,17 @@ pub async fn delete_pod(name: String, namespace: String) -> Result<(), String> {
     Ok(())
 }
 
-/// Execs into a pod via kubectl, streaming output line-by-line as Tauri events.
-/// Tries /bin/sh first; falls back to /bin/bash if the first shell exits non-zero.
+/// Opens the user's native terminal with `kubectl exec -it` running inside it.
+/// Tries /bin/sh first; if that exits non-zero the shell falls back to /bin/bash
+/// (both are chained with `;` so the terminal stays open for the user to see any
+/// error before closing).
 ///
-/// Events emitted:
-/// - `exec-output` — payload: `String` — one line of stdout
-/// - `exec-error`  — payload: `String` — stderr output
-/// - `exec-done`   — payload: `null`   — stream finished
+/// Platform behaviour:
+///   Windows  — Windows Terminal (`wt`) if available, otherwise `cmd /C start`
+///   macOS    — Terminal.app via osascript
+///   Linux    — First available of gnome-terminal, xterm, konsole, xfce4-terminal
 #[tauri::command]
 pub async fn exec_into_pod(
-    app: AppHandle,
     name: String,
     namespace: String,
     source_file: String,
@@ -225,59 +222,52 @@ pub async fn exec_into_pod(
         .map(|p| p.to_string_lossy().to_string())
         .unwrap_or_else(|_| "kubectl".to_string());
 
-    let shells = ["/bin/sh", "/bin/bash"];
+    let exec_args = format!(
+        "{kubectl} exec -it {name} -n {namespace} --kubeconfig={source_file} --context={context_name} -- /bin/sh ; {kubectl} exec -it {name} -n {namespace} --kubeconfig={source_file} --context={context_name} -- /bin/bash",
+    );
 
-    for (idx, shell) in shells.iter().enumerate() {
-        eprintln!(
-            "[exec] {} exec -i {name} -n {namespace} --kubeconfig={source_file} --context={context_name} -- {shell}",
-            kubectl
-        );
-
-        let mut child = Command::new(&kubectl)
-            .args([
-                "exec", "-i", &name, "-n", &namespace,
-                &format!("--kubeconfig={source_file}"),
-                &format!("--context={context_name}"),
-                "--", shell,
-            ])
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()
-            .map_err(|e| format!("kubectl not found: {e}"))?;
-
-        let stdout = child.stdout.take().ok_or("no stdout")?;
-        let mut lines = BufReader::new(stdout).lines();
-
-        while let Some(line) = lines.next_line().await.map_err(|e| e.to_string())? {
-            app.emit("exec-output", line).map_err(|e| e.to_string())?;
+    #[cfg(target_os = "windows")]
+    {
+        let wt = which::which("wt").is_ok();
+        if wt {
+            std::process::Command::new("wt")
+                .args(["new-tab", "--", "cmd", "/K", &exec_args])
+                .spawn()
+                .map_err(|e| e.to_string())?;
+        } else {
+            std::process::Command::new("cmd")
+                .args(["/C", "start", "cmd", "/K", &exec_args])
+                .spawn()
+                .map_err(|e| e.to_string())?;
         }
-        drop(lines);
-
-        let output = child.wait_with_output().await.map_err(|e| e.to_string())?;
-        let err_str = String::from_utf8_lossy(&output.stderr);
-        let err_str = err_str.trim();
-
-        if output.status.success() {
-            if !err_str.is_empty() {
-                app.emit("exec-error", err_str).map_err(|e| e.to_string())?;
-            }
-            app.emit("exec-done", ()).map_err(|e| e.to_string())?;
-            return Ok(());
-        }
-
-        // Non-zero exit on first shell — retry with next
-        if idx < shells.len() - 1 {
-            continue;
-        }
-
-        // All shells exhausted — report the error
-        if !err_str.is_empty() {
-            app.emit("exec-error", err_str).map_err(|e| e.to_string())?;
-        }
-        app.emit("exec-done", ()).map_err(|e| e.to_string())?;
-        return Err(format!("exec failed: {err_str}"));
     }
 
-    app.emit("exec-done", ()).map_err(|e| e.to_string())?;
+    #[cfg(target_os = "macos")]
+    {
+        std::process::Command::new("osascript")
+            .args([
+                "-e",
+                &format!(
+                    "tell app \"Terminal\" to do script \"{}\"",
+                    exec_args
+                ),
+            ])
+            .spawn()
+            .map_err(|e| e.to_string())?;
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        let terminals = ["gnome-terminal", "xterm", "konsole", "xfce4-terminal"];
+        let term = terminals.iter()
+            .find(|t| which::which(t).is_ok())
+            .ok_or("No terminal emulator found")?;
+
+        std::process::Command::new(term)
+            .args(["--", "bash", "-c", &exec_args])
+            .spawn()
+            .map_err(|e| e.to_string())?;
+    }
+
     Ok(())
 }

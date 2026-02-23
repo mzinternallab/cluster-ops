@@ -67,7 +67,7 @@ export function PodRow({ pod, isSelected, onSelect, onDescribe, onLogs, onExec }
 
           {/* Exec button */}
           <button
-            title="Exec into pod"
+            title="Opens in terminal"
             onClick={(e) => { e.stopPropagation(); onExec() }}
             className="flex items-center h-5 px-1.5 rounded text-[10px] font-mono border transition-colors"
             style={{ background: '#1a1a2e', borderColor: '#2a2a4a', color: '#7a7adc' }}

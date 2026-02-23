@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
@@ -47,15 +47,15 @@ fn windows_home_in_wsl() -> Option<PathBuf> {
 }
 
 /// Builds the list of `.kube` directories to scan.
-/// Always includes `~/.kube`; also includes the Windows user's `.kube` when
-/// running under WSL2 (detected via the USERPROFILE env var).
+/// Uses `dirs::home_dir()` for portability (works on Windows, Linux, macOS).
+/// On WSL2 also includes the Windows user's `.kube` directory.
 fn kube_dirs_to_scan() -> Vec<PathBuf> {
     let mut dirs = Vec::new();
 
-    // WSL / native Linux home
+    // Native home — works on Windows (C:\Users\NAME), Linux (~), and macOS (~)
     if let Some(home) = dirs::home_dir() {
         let d = home.join(".kube");
-        eprintln!("[kubeconfig] WSL home kube dir = {}", d.display());
+        eprintln!("[kubeconfig] home kube dir = {}", d.display());
         if d.is_dir() {
             dirs.push(d);
         } else {
@@ -77,22 +77,10 @@ fn kube_dirs_to_scan() -> Vec<PathBuf> {
     dirs
 }
 
-// ── kubeconfig merge helpers ──────────────────────────────────────────────────
+// ── file scanning helpers ─────────────────────────────────────────────────────
 
-/// Merges `extra` into `base` by extending clusters, auth_infos, and contexts.
-/// `base.current_context` wins; `extra.current_context` is used only if base has none.
-fn merge_kubeconfig(mut base: Kubeconfig, extra: Kubeconfig) -> Kubeconfig {
-    base.clusters.extend(extra.clusters);
-    base.auth_infos.extend(extra.auth_infos);
-    base.contexts.extend(extra.contexts);
-    if base.current_context.is_none() {
-        base.current_context = extra.current_context;
-    }
-    base
-}
-
-/// Returns all regular, non-hidden files in `dir`, sorted alphabetically.
-/// Skips subdirectories and any file whose name begins with '.'.
+/// Returns all regular files in `dir` whose name starts with `"config"`, sorted alphabetically.
+/// Skips subdirectories and any file whose name does not start with `"config"`.
 fn scan_kube_dir(dir: &std::path::Path) -> Vec<PathBuf> {
     let mut paths = Vec::new();
 
@@ -112,8 +100,8 @@ fn scan_kube_dir(dir: &std::path::Path) -> Vec<PathBuf> {
             eprintln!("[kubeconfig]   DIR  (skipped)    {}", path.display());
             continue;
         }
-        if name.starts_with('.') {
-            eprintln!("[kubeconfig]   HIDDEN (skipped) {}", path.display());
+        if !name.starts_with("config") {
+            eprintln!("[kubeconfig]   NON-CONFIG (skipped) {}", path.display());
             continue;
         }
         eprintln!("[kubeconfig]   FILE (candidate) {}", path.display());
@@ -124,62 +112,85 @@ fn scan_kube_dir(dir: &std::path::Path) -> Vec<PathBuf> {
     paths
 }
 
-/// Tries to parse each path as a kubeconfig and merges all that succeed.
-/// Every file is logged with its outcome.
-fn load_from_paths(paths: &[PathBuf]) -> Option<Kubeconfig> {
-    let mut merged: Option<Kubeconfig> = None;
-
-    for path in paths {
-        match Kubeconfig::read_from(path) {
+/// Parses each path as a kubeconfig, logging outcomes, and returns successful
+/// `(path, Kubeconfig)` pairs.  File provenance is preserved so every context
+/// can be associated with the exact file it came from.
+fn load_files_from_paths(paths: &[PathBuf]) -> Vec<(PathBuf, Kubeconfig)> {
+    paths
+        .iter()
+        .filter_map(|path| match Kubeconfig::read_from(path) {
             Ok(cfg) => {
                 eprintln!(
                     "[kubeconfig]   PARSE ok ({} ctx)  {}",
                     cfg.contexts.len(),
                     path.display()
                 );
-                merged = Some(match merged.take() {
-                    None => cfg,
-                    Some(base) => merge_kubeconfig(base, cfg),
-                });
+                Some((path.clone(), cfg))
             }
             Err(e) => {
                 eprintln!("[kubeconfig]   PARSE fail ({e})  {}", path.display());
+                None
             }
-        }
-    }
-
-    merged
+        })
+        .collect()
 }
 
-/// Converts a merged `Kubeconfig` into the `Vec<KubeContext>` the frontend needs.
-fn build_contexts(kubeconfig: Kubeconfig) -> Vec<KubeContext> {
-    let current = kubeconfig.current_context.clone().unwrap_or_default();
+// ── context builder ───────────────────────────────────────────────────────────
 
-    let cluster_servers: HashMap<String, String> = kubeconfig
-        .clusters
+/// Converts a list of `(file, Kubeconfig)` pairs into `Vec<KubeContext>`.
+///
+/// - `current_context` is taken from the first file that declares one (mirrors
+///   kubectl's resolution order for KUBECONFIG).
+/// - The cluster→server map is built across *all* files so cross-file references
+///   resolve correctly.
+/// - Each `KubeContext` records `kubeconfig_file` — the exact file that contained
+///   its context entry — so the caller can pass `--kubeconfig=<file>` directly to
+///   kubectl without any multi-path separator issues.
+/// - If the same context name appears in multiple files, the first occurrence wins.
+fn build_contexts_from_files(files: &[(PathBuf, Kubeconfig)]) -> Vec<KubeContext> {
+    // First file with a current_context wins (kubectl behaviour).
+    let current = files
         .iter()
+        .find_map(|(_, cfg)| cfg.current_context.as_ref())
+        .cloned()
+        .unwrap_or_default();
+
+    // Cluster → server URL across all files.
+    let cluster_servers: HashMap<String, String> = files
+        .iter()
+        .flat_map(|(_, cfg)| cfg.clusters.iter())
         .filter_map(|nc| {
             let server = nc.cluster.as_ref()?.server.clone()?;
             Some((nc.name.clone(), server))
         })
         .collect();
 
-    kubeconfig
-        .contexts
-        .into_iter()
-        .filter_map(|named| {
-            let ctx = named.context?;
+    // Emit contexts preserving file origin; first occurrence of a name wins.
+    let mut seen: HashSet<String> = HashSet::new();
+    let mut contexts = Vec::new();
+
+    for (path, cfg) in files {
+        for named in &cfg.contexts {
+            if !seen.insert(named.name.clone()) {
+                continue; // duplicate — already have this context
+            }
+            let Some(ctx) = named.context.as_ref() else {
+                continue;
+            };
             let server_url = cluster_servers.get(&ctx.cluster).cloned();
-            Some(KubeContext {
+            contexts.push(KubeContext {
                 name: named.name.clone(),
-                cluster: ctx.cluster,
-                user: ctx.user.unwrap_or_default(),
-                namespace: ctx.namespace,
+                cluster: ctx.cluster.clone(),
+                user: ctx.user.clone().unwrap_or_default(),
+                namespace: ctx.namespace.clone(),
                 is_active: named.name == current,
                 server_url,
-            })
-        })
-        .collect()
+                kubeconfig_file: Some(path.to_string_lossy().into_owned()),
+            });
+        }
+    }
+
+    contexts
 }
 
 // ── commands ──────────────────────────────────────────────────────────────────
@@ -187,14 +198,15 @@ fn build_contexts(kubeconfig: Kubeconfig) -> Vec<KubeContext> {
 /// Lists all contexts from the merged kubeconfig.
 ///
 /// Resolution order:
-/// 1. If KUBECONFIG env var is set AND `Kubeconfig::read()` returns at least one
-///    context, use that result (same semantics as kubectl).
-/// 2. Otherwise — KUBECONFIG unset, file missing, or yielding zero contexts —
-///    scan every `.kube` directory that applies:
-///    - `~/.kube`           (WSL/Linux home)
-///    - Windows `%USERPROFILE%\.kube`  (converted to `/mnt/…`, WSL2 only)
-///    Every regular file in those directories is attempted as a kubeconfig.
-///    All valid results are merged.
+/// 1. If KUBECONFIG env var is set, read each path in it individually (using
+///    the platform separator: `;` on Windows, `:` on Unix).  If at least one
+///    context is found, return those results with per-context file provenance.
+/// 2. Otherwise — KUBECONFIG unset, files missing, or zero contexts — scan
+///    every applicable `.kube` directory:
+///    - `~/.kube`                     (portable, works on Windows / Linux / macOS)
+///    - Windows `%USERPROFILE%\.kube` (converted to `/mnt/…`, WSL2 only)
+///    Every regular file whose name starts with `"config"` is attempted.
+///    All valid results are returned with per-context file provenance.
 #[tauri::command]
 pub async fn get_kubeconfig_contexts() -> Result<Vec<KubeContext>, String> {
     let kube_env = std::env::var("KUBECONFIG").unwrap_or_default();
@@ -202,27 +214,34 @@ pub async fn get_kubeconfig_contexts() -> Result<Vec<KubeContext>, String> {
     eprintln!("[kubeconfig] KUBECONFIG env = {:?}", kube_env);
     log::info!("kubeconfig: KUBECONFIG env = {:?}", kube_env);
 
-    // ── 1. Try KUBECONFIG env var first ──────────────────────────────────────
+    // ── 1. Try KUBECONFIG env var — read each file individually ──────────────
     if !kube_env.is_empty() {
-        match Kubeconfig::read() {
-            Ok(cfg) if !cfg.contexts.is_empty() => {
-                eprintln!("[kubeconfig] KUBECONFIG env: found {} context(s) — done", cfg.contexts.len());
-                log::info!("kubeconfig: KUBECONFIG env yielded {} context(s)", cfg.contexts.len());
-                let contexts = build_contexts(cfg);
-                for c in &contexts {
-                    eprintln!("[kubeconfig]   {:?}  active={}", c.name, c.is_active);
-                }
-                return Ok(contexts);
+        let sep = if cfg!(windows) { ';' } else { ':' };
+        let paths: Vec<PathBuf> = kube_env
+            .split(sep)
+            .filter(|s| !s.trim().is_empty())
+            .map(|s| PathBuf::from(s.trim()))
+            .collect();
+
+        eprintln!("[kubeconfig] KUBECONFIG env: {} path(s)", paths.len());
+        let file_configs = load_files_from_paths(&paths);
+        let total: usize = file_configs.iter().map(|(_, c)| c.contexts.len()).sum();
+
+        if total > 0 {
+            eprintln!("[kubeconfig] KUBECONFIG env: {total} context(s) — done");
+            log::info!("kubeconfig: KUBECONFIG env yielded {total} context(s)");
+            let contexts = build_contexts_from_files(&file_configs);
+            for c in &contexts {
+                eprintln!(
+                    "[kubeconfig]   {:?}  active={}  file={:?}",
+                    c.name, c.is_active, c.kubeconfig_file
+                );
             }
-            Ok(_) => {
-                eprintln!("[kubeconfig] KUBECONFIG env: 0 contexts — falling back to dir scan");
-                log::warn!("kubeconfig: KUBECONFIG set but yielded 0 contexts; scanning dirs");
-            }
-            Err(e) => {
-                eprintln!("[kubeconfig] KUBECONFIG env: read failed ({e}) — falling back to dir scan");
-                log::warn!("kubeconfig: KUBECONFIG read failed: {e}; scanning dirs");
-            }
+            return Ok(contexts);
         }
+
+        eprintln!("[kubeconfig] KUBECONFIG env: 0 contexts — falling back to dir scan");
+        log::warn!("kubeconfig: KUBECONFIG set but yielded 0 contexts; scanning dirs");
     }
 
     // ── 2. Scan all applicable .kube directories ──────────────────────────────
@@ -240,18 +259,25 @@ pub async fn get_kubeconfig_contexts() -> Result<Vec<KubeContext>, String> {
         all_candidates.extend(files);
     }
 
-    eprintln!("[kubeconfig] {} total candidate file(s) across all dirs", all_candidates.len());
+    eprintln!(
+        "[kubeconfig] {} total candidate file(s) across all dirs",
+        all_candidates.len()
+    );
 
-    let Some(merged) = load_from_paths(&all_candidates) else {
+    let file_configs = load_files_from_paths(&all_candidates);
+    if file_configs.is_empty() {
         eprintln!("[kubeconfig] No valid kubeconfig files found — returning empty");
         log::warn!("kubeconfig: no valid kubeconfig files found");
         return Ok(vec![]);
-    };
+    }
 
-    let contexts = build_contexts(merged);
+    let contexts = build_contexts_from_files(&file_configs);
     eprintln!("[kubeconfig] Returning {} context(s):", contexts.len());
     for c in &contexts {
-        eprintln!("[kubeconfig]   {:?}  active={}", c.name, c.is_active);
+        eprintln!(
+            "[kubeconfig]   {:?}  active={}  file={:?}",
+            c.name, c.is_active, c.kubeconfig_file
+        );
     }
     eprintln!("[kubeconfig] ─────────────────────────────────────────────────────");
     log::info!("kubeconfig: returning {} context(s)", contexts.len());

@@ -86,16 +86,18 @@ export default function App() {
       // This lets kubectl proxy use the correct --context from startup, rather
       // than relying on whatever current-context the merged kubeconfig happens
       // to have set.
-      let activeContextName: string | undefined
+      let activeCtx: KubeContext | undefined
       try {
         const contexts = await invoke<KubeContext[]>('get_kubeconfig_contexts')
-        activeContextName = contexts.find((c) => c.isActive)?.name
+        activeCtx = contexts.find((c) => c.isActive)
       } catch {
         // Non-fatal: fall through and start proxy without explicit context.
       }
 
       await invoke('start_kubectl_proxy',
-        activeContextName ? { context: activeContextName } : {},
+        activeCtx
+          ? { context: activeCtx.name, kubeconfigFile: activeCtx.kubeconfigFile }
+          : {},
       )
 
       setProxyReady(true)

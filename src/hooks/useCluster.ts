@@ -96,7 +96,7 @@ export async function switchClusterContext(
     // Restart kubectl proxy pointed at the new context.
     // The Rust command kills the old proxy, spawns a new one, and waits
     // 1500 ms for it to start before resolving.
-    await invoke('start_kubectl_proxy', { context: ctx.name })
+    await invoke('start_kubectl_proxy', { context: ctx.name, kubeconfigFile: ctx.kubeconfigFile })
 
     setActiveContext(ctx)
 

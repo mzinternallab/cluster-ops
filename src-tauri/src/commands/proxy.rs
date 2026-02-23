@@ -3,10 +3,31 @@ use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use std::sync::{Arc, Mutex as StdMutex};
 use std::thread;
+use kube::config::Kubeconfig;
 use tauri::State;
 use tokio::time::{sleep, Duration};
 
 use crate::KubectlProxy;
+
+// ── kubectl binary ────────────────────────────────────────────────────────────
+
+/// Returns the kubectl binary to invoke.
+///
+/// - **Windows**: always `kubectl.exe` (found via PATH).
+/// - **Linux / macOS**: checks the two most common explicit paths first so the
+///   proxy starts even when Tauri's stripped-down PATH doesn't include them.
+fn kubectl_binary() -> String {
+    if cfg!(windows) {
+        return "kubectl.exe".to_string();
+    }
+    // Prefer explicit paths on Unix so Tauri's stripped PATH doesn't cause ENOENT.
+    for candidate in ["/usr/bin/kubectl", "/usr/local/bin/kubectl"] {
+        if std::path::Path::new(candidate).exists() {
+            return candidate.to_string();
+        }
+    }
+    "kubectl".to_string()
+}
 
 // ── WSL / Windows helpers ─────────────────────────────────────────────────────
 
@@ -25,70 +46,91 @@ fn windows_home_in_wsl() -> Option<PathBuf> {
     Some(PathBuf::from(format!("/mnt/{drive}{rest}")))
 }
 
-/// Builds a colon-separated KUBECONFIG value from every regular, non-hidden file
-/// found in `~/.kube` (WSL home) and `%USERPROFILE%\.kube` (Windows, if in WSL2).
-/// This is passed as the KUBECONFIG env var when spawning kubectl proxy so that
-/// kubectl can find kubeconfig files on the Windows filesystem.
-fn build_kubeconfig_env() -> Option<String> {
-    let mut kube_dirs: Vec<PathBuf> = Vec::new();
-
+/// Returns all `.kube` directories to scan using `dirs::home_dir()` for
+/// portability (Windows, Linux, macOS).  On WSL2 also includes the Windows-side
+/// home directory.
+fn kube_dirs_to_scan() -> Vec<PathBuf> {
+    let mut dirs = Vec::new();
+    // dirs::home_dir() is platform-aware: C:\Users\NAME on Windows, ~ on Unix.
     if let Some(home) = dirs::home_dir() {
-        kube_dirs.push(home.join(".kube"));
-    }
-    if let Some(win_home) = windows_home_in_wsl() {
-        kube_dirs.push(win_home.join(".kube"));
-    }
-
-    let mut files: Vec<String> = Vec::new();
-    for dir in &kube_dirs {
-        if !dir.is_dir() {
-            continue;
+        let d = home.join(".kube");
+        if d.is_dir() {
+            dirs.push(d);
         }
-        let Ok(entries) = std::fs::read_dir(dir) else {
-            continue;
-        };
-        let mut dir_files: Vec<String> = entries
-            .flatten()
-            .filter_map(|e| {
-                let p = e.path();
-                if p.is_dir() {
-                    return None;
-                }
-                let name = p.file_name()?.to_str()?.to_string();
-                if name.starts_with('.') {
-                    return None;
-                }
-                Some(p.to_string_lossy().into_owned())
-            })
-            .collect();
-        dir_files.sort();
-        files.extend(dir_files);
     }
+    // WSL2: also scan the Windows-side .kube directory.
+    if let Some(win_home) = windows_home_in_wsl() {
+        let d = win_home.join(".kube");
+        if d.is_dir() {
+            dirs.push(d);
+        }
+    }
+    dirs
+}
 
-    if files.is_empty() {
-        None
-    } else {
-        eprintln!("[proxy] KUBECONFIG = {}", files.join(":"));
-        Some(files.join(":"))
+/// Returns all regular files in `dir` whose name starts with `"config"`, sorted.
+fn scan_kube_dir_for_configs(dir: &std::path::Path) -> Vec<PathBuf> {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return vec![];
+    };
+    let mut paths: Vec<PathBuf> = entries
+        .flatten()
+        .filter_map(|e| {
+            let p = e.path();
+            let name = p.file_name()?.to_str()?.to_string();
+            if p.is_dir() || !name.starts_with("config") {
+                return None;
+            }
+            Some(p)
+        })
+        .collect();
+    paths.sort();
+    paths
+}
+
+/// Fallback: scans all kubeconfig files in the applicable `.kube` directories
+/// and returns the path of the first file that contains `context_name`.
+/// Used when the frontend did not supply a `kubeconfig_file` (e.g. older
+/// cached state or KUBECONFIG env-var contexts).
+fn find_kubeconfig_for_context(context_name: &str) -> Option<PathBuf> {
+    for dir in kube_dirs_to_scan() {
+        eprintln!("[proxy] scanning {} for context '{context_name}'", dir.display());
+        for path in scan_kube_dir_for_configs(&dir) {
+            match Kubeconfig::read_from(&path) {
+                Ok(cfg) => {
+                    if cfg.contexts.iter().any(|c| c.name == context_name) {
+                        eprintln!("[proxy] found context in {}", path.display());
+                        return Some(path);
+                    }
+                }
+                Err(e) => {
+                    eprintln!("[proxy] skipping {} (parse error: {e})", path.display());
+                }
+            }
+        }
     }
+    eprintln!("[proxy] context '{context_name}' not found in any kubeconfig file");
+    None
 }
 
 // ── commands ──────────────────────────────────────────────────────────────────
 
-/// Starts `kubectl proxy --port=8001 --disable-filter=true [--context=<ctx>]`.
+/// Starts `kubectl proxy --port=8001 --disable-filter=true --kubeconfig=<file> --context=<ctx>`.
 ///
-/// - Kills any running proxy first (idempotent).
-/// - Sets `KUBECONFIG` to include all kubeconfig files found in `~/.kube`
-///   and the Windows-side `%USERPROFILE%\.kube` (WSL2 support).
-/// - Passes `--context` when the caller supplies one (cluster-switch path).
-///   At startup, omit `context` and kubectl uses the `current-context` from
-///   the merged kubeconfig.
-/// - Polls http://127.0.0.1:8001/api every 500 ms (up to 10 attempts) instead
-///   of sleeping a fixed duration, so the frontend unblocks as soon as the
-///   proxy is actually ready.
+/// Cross-platform behaviour:
+/// - kubectl binary: `kubectl.exe` on Windows, explicit Unix paths on Linux/macOS.
+/// - `--kubeconfig` always points to a single file (never a colon/semicolon list),
+///   eliminating multi-path separator issues on all platforms.
+///
+/// `kubeconfig_file` (preferred): the exact file path stored in `KubeContext.kubeconfigFile`
+/// by `get_kubeconfig_contexts`.  When absent, falls back to a directory scan.
+///
+/// Polls `http://127.0.0.1:8001/api` every 500 ms (up to 10 attempts) and
+/// returns as soon as the proxy responds, rather than sleeping a fixed time.
 #[tauri::command]
 pub async fn start_kubectl_proxy(
     context: Option<String>,
+    kubeconfig_file: Option<String>,
     state: State<'_, KubectlProxy>,
 ) -> Result<(), String> {
     let mut args = vec![
@@ -96,12 +138,31 @@ pub async fn start_kubectl_proxy(
         "--port=8001".to_string(),
         "--disable-filter=true".to_string(),
     ];
+
+    // Resolve kubeconfig path and context args.
+    // Priority: kubeconfig_file from frontend → directory scan fallback.
     if let Some(ref ctx) = context {
         args.push(format!("--context={ctx}"));
+
+        let resolved_path = kubeconfig_file
+            .as_deref()
+            .filter(|s| !s.is_empty())
+            .map(PathBuf::from)
+            .or_else(|| find_kubeconfig_for_context(ctx));
+
+        if let Some(path) = resolved_path {
+            // Always pass a single-file --kubeconfig; no separator ambiguity.
+            args.push(format!("--kubeconfig={}", path.display()));
+            eprintln!("[proxy] kubeconfig file: {}", path.display());
+        } else {
+            eprintln!("[proxy] warning: could not locate kubeconfig file for context '{ctx}'");
+        }
     }
 
     // Accumulates proxy stderr lines so we can include them in error messages.
     let stderr_log: Arc<StdMutex<String>> = Arc::new(StdMutex::new(String::new()));
+
+    let kubectl_bin = kubectl_binary();
 
     // ── spawn inside a block so MutexGuard is dropped before any .await ───────
     {
@@ -113,36 +174,12 @@ pub async fn start_kubectl_proxy(
             let _ = child.kill();
         }
 
-        // Resolve kubectl binary — use the WSL path when available, else PATH.
-        let kubectl_bin = if cfg!(target_os = "linux") {
-            // In WSL2 the binary lives at /usr/bin/kubectl (installed via apt / snap).
-            // Prefer the explicit path so Tauri's stripped-down PATH isn't an issue.
-            if std::path::Path::new("/usr/bin/kubectl").exists() {
-                "/usr/bin/kubectl".to_string()
-            } else if std::path::Path::new("/usr/local/bin/kubectl").exists() {
-                "/usr/local/bin/kubectl".to_string()
-            } else {
-                "kubectl".to_string()
-            }
-        } else {
-            "kubectl".to_string()
-        };
-
-        eprintln!(
-            "[proxy] spawning: {} {}",
-            kubectl_bin,
-            args.join(" ")
-        );
+        eprintln!("[proxy] spawning: {kubectl_bin} {}", args.join(" "));
 
         let mut cmd = Command::new(&kubectl_bin);
         cmd.args(&args)
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
-
-        // Override KUBECONFIG so kubectl can find the Windows-side config files.
-        if let Some(kubeconfig) = build_kubeconfig_env() {
-            cmd.env("KUBECONFIG", kubeconfig);
-        }
 
         let mut child = cmd
             .spawn()
@@ -189,8 +226,8 @@ pub async fn start_kubectl_proxy(
             Ok(resp) => {
                 let status = resp.status().as_u16();
                 eprintln!("[proxy] attempt {attempt}/10: HTTP {status}");
-                // 200 means healthy; 403 means proxy is up but auth is denied —
-                // either way the proxy itself is listening.
+                // 200 = healthy; 403 = proxy is up but auth is denied — either
+                // way the proxy itself is listening and ready for kube-rs calls.
                 if resp.status().is_success() || status == 403 {
                     eprintln!("[proxy] ready on :8001 (after {attempt} attempt(s))");
                     return Ok(());
@@ -202,12 +239,8 @@ pub async fn start_kubectl_proxy(
         }
     }
 
-    // All 10 attempts failed — collect whatever stderr we captured.
-    let captured = stderr_log
-        .lock()
-        .map(|g| g.clone())
-        .unwrap_or_default();
-
+    // All 10 attempts failed — include whatever stderr was captured.
+    let captured = stderr_log.lock().map(|g| g.clone()).unwrap_or_default();
     let detail = if captured.trim().is_empty() {
         "no output captured from kubectl proxy".to_string()
     } else {

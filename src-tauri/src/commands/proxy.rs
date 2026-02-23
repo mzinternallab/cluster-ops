@@ -5,9 +5,16 @@ use crate::KubectlProxy;
 
 /// Starts `kubectl proxy --port=8001 --disable-filter=true`.
 /// Kills any existing proxy process first so the command is idempotent.
-/// The frontend calls this on app startup before making any API requests.
+///
+/// When `source_file` and `context` are provided, adds:
+///   --kubeconfig=<source_file>  (single file — no multi-path separator issues)
+///   --context=<context>
 #[tauri::command]
-pub async fn start_kubectl_proxy(state: State<'_, KubectlProxy>) -> Result<(), String> {
+pub async fn start_kubectl_proxy(
+    context: Option<String>,
+    source_file: Option<String>,
+    state: State<'_, KubectlProxy>,
+) -> Result<(), String> {
     let mut guard = state.0.lock().map_err(|e| e.to_string())?;
 
     // Kill any existing proxy process before (re-)starting.
@@ -15,8 +22,21 @@ pub async fn start_kubectl_proxy(state: State<'_, KubectlProxy>) -> Result<(), S
         let _ = child.kill();
     }
 
+    let mut args = vec![
+        "proxy".to_string(),
+        "--port=8001".to_string(),
+        "--disable-filter=true".to_string(),
+    ];
+
+    if let Some(ref file) = source_file {
+        args.push(format!("--kubeconfig={file}"));
+    }
+    if let Some(ref ctx) = context {
+        args.push(format!("--context={ctx}"));
+    }
+
     let child = Command::new("kubectl")
-        .args(["proxy", "--port=8001", "--disable-filter=true"])
+        .args(&args)
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .spawn()

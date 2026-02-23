@@ -8,7 +8,7 @@ use crate::KubectlProxy;
 
 #[tauri::command]
 pub async fn start_kubectl_proxy(
-    context: Option<String>,
+    context_name: Option<String>,
     source_file: Option<String>,
     state: State<'_, KubectlProxy>,
 ) -> Result<(), String> {
@@ -22,7 +22,7 @@ pub async fn start_kubectl_proxy(
     if let Some(ref file) = source_file {
         args.push(format!("--kubeconfig={file}"));
     }
-    if let Some(ref ctx) = context {
+    if let Some(ref ctx) = context_name {
         args.push(format!("--context={ctx}"));
     }
 

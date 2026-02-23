@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
@@ -6,7 +6,7 @@ use kube::config::Kubeconfig;
 
 use crate::models::k8s::KubeContext;
 
-// ── helpers ───────────────────────────────────────────────────────────────────
+// ── path helpers ──────────────────────────────────────────────────────────────
 
 /// Returns the first kubeconfig file path to use for writes.
 /// Respects KUBECONFIG env var (`:` on Unix, `;` on Windows), then ~/.kube/config.
@@ -23,11 +23,33 @@ fn primary_kubeconfig_path() -> Option<PathBuf> {
         .or_else(|| dirs::home_dir().map(|h| h.join(".kube").join("config")))
 }
 
+/// Derives the display name for a cluster from its kubeconfig filename.
+///
+/// Rules:
+///   "config.eagle-i-orc"  →  "eagle-i-orc"
+///   "config.rovi"         →  "rovi"
+///   "config"              →  falls back to `fallback` (the context name)
+fn display_name_from_filename(filename: &str, fallback: &str) -> String {
+    if let Some(suffix) = filename.strip_prefix("config.") {
+        if !suffix.is_empty() {
+            return suffix.to_string();
+        }
+    }
+    fallback.to_string()
+}
+
 // ── commands ──────────────────────────────────────────────────────────────────
 
 /// Lists all contexts found by scanning every file in `~/.kube` whose name
-/// starts with `"config"`.  Each returned `KubeContext` carries a `source_file`
-/// field recording the exact file it was parsed from.
+/// starts with `"config"`.
+///
+/// Each returned `KubeContext` has:
+///   - `display_name`  — from the filename (e.g. "eagle-i-orc")
+///   - `context_name`  — actual context name in the file (e.g. "local")
+///   - `source_file`   — absolute path to the owning file
+///
+/// `is_active` is true for the single (source_file, context_name) pair that
+/// corresponds to the kubeconfig's declared `current-context`.
 #[tauri::command]
 pub async fn get_kubeconfig_contexts() -> Result<Vec<KubeContext>, String> {
     let kube_dir = dirs::home_dir()
@@ -82,11 +104,15 @@ pub async fn get_kubeconfig_contexts() -> Result<Vec<KubeContext>, String> {
         return Ok(vec![]);
     }
 
-    // ── determine active context (first file that declares one wins) ──────────
-    let current = parsed
+    // ── determine which (source_file, context_name) pair is active ────────────
+    // The first file that declares current_context is authoritative.
+    let (active_source, active_ctx_name) = parsed
         .iter()
-        .find_map(|(_, cfg)| cfg.current_context.as_ref())
-        .cloned()
+        .find_map(|(path, cfg)| {
+            cfg.current_context
+                .as_ref()
+                .map(|c| (path.to_string_lossy().into_owned(), c.clone()))
+        })
         .unwrap_or_default();
 
     // ── build cluster → server URL map across all files ───────────────────────
@@ -99,28 +125,33 @@ pub async fn get_kubeconfig_contexts() -> Result<Vec<KubeContext>, String> {
         })
         .collect();
 
-    // ── emit one KubeContext per unique context name, tagged with source file ──
-    let mut seen: HashSet<String> = HashSet::new();
+    // ── emit one KubeContext per (file, context) pair ─────────────────────────
+    // No deduplication by context_name — multiple files can all have context
+    // "local" and each represents a distinct cluster. display_name (from the
+    // filename) is what uniquely identifies each cluster in the UI.
     let mut contexts: Vec<KubeContext> = Vec::new();
 
     for (path, cfg) in &parsed {
         let source = path.to_string_lossy().into_owned();
+        let filename = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+
         for named in &cfg.contexts {
-            if !seen.insert(named.name.clone()) {
-                continue; // duplicate name — first file wins
-            }
             let Some(ctx) = named.context.as_ref() else {
                 continue;
             };
+            let context_name = named.name.clone();
+            let display_name = display_name_from_filename(filename, &context_name);
             let server_url = cluster_servers.get(&ctx.cluster).cloned();
+            let is_active = source == active_source && context_name == active_ctx_name;
+
             contexts.push(KubeContext {
-                name: named.name.clone(),
+                display_name,
+                context_name,
+                source_file: source.clone(),
                 cluster: ctx.cluster.clone(),
                 user: ctx.user.clone().unwrap_or_default(),
-                namespace: ctx.namespace.clone(),
-                is_active: named.name == current,
+                is_active,
                 server_url,
-                source_file: Some(source.clone()),
             });
         }
     }
@@ -129,11 +160,18 @@ pub async fn get_kubeconfig_contexts() -> Result<Vec<KubeContext>, String> {
     Ok(contexts)
 }
 
-/// Writes the new current-context into the primary kubeconfig file.
+/// Writes the new current-context into the source file for the selected context.
 /// Preserves all other fields verbatim by parsing as serde_yaml::Value.
 #[tauri::command]
-pub async fn set_active_context(context_name: String) -> Result<(), String> {
-    let path = primary_kubeconfig_path()
+pub async fn set_active_context(
+    context_name: String,
+    source_file: Option<String>,
+) -> Result<(), String> {
+    // Write to the specific source file if provided; otherwise fall back to
+    // the primary kubeconfig path.
+    let path = source_file
+        .map(PathBuf::from)
+        .or_else(primary_kubeconfig_path)
         .ok_or_else(|| "Cannot determine kubeconfig path".to_string())?;
 
     let raw = std::fs::read_to_string(&path)
@@ -157,8 +195,6 @@ pub async fn set_active_context(context_name: String) -> Result<(), String> {
 /// - "healthy"      — responded in < 1.5 s
 /// - "slow"         — responded in 1.5 – 5 s
 /// - "unreachable"  — timed out or connection refused
-///
-/// Accepts invalid / self-signed TLS certs because many k8s clusters use them.
 #[tauri::command]
 pub async fn check_cluster_health(server_url: String) -> String {
     let client = match reqwest::Client::builder()

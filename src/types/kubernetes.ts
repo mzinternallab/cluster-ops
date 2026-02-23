@@ -3,15 +3,20 @@
 export type ClusterHealth = 'healthy' | 'slow' | 'unreachable' | 'unknown'
 
 export interface KubeContext {
-  name: string
+  /** Derived from the kubeconfig filename — shown in the UI.
+   *  e.g. "config.eagle-i-orc" → "eagle-i-orc" */
+  displayName: string
+  /** Actual context name inside the kubeconfig file, e.g. "local".
+   *  Always passed as --context to kubectl subprocesses. */
+  contextName: string
+  /** Absolute path to the kubeconfig file that owns this context.
+   *  Always passed as --kubeconfig to kubectl subprocesses. */
+  sourceFile: string
   cluster: string
   user: string
-  namespace?: string
   isActive: boolean
-  /** API server URL — used for health checks; comes from the clusters stanza */
+  /** API server URL — used for health checks */
   serverUrl?: string
-  /** Absolute path of the kubeconfig file that owns this context */
-  sourceFile?: string
 }
 
 export interface PodSummary {

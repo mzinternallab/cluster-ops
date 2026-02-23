@@ -29,8 +29,6 @@ function Dot({ health }: { health: ClusterHealth }) {
   )
 }
 
-// ── chevron ───────────────────────────────────────────────────────────────────
-
 function Chevron({ open }: { open: boolean }) {
   return (
     <svg
@@ -48,8 +46,6 @@ function Chevron({ open }: { open: boolean }) {
     </svg>
   )
 }
-
-// ── checkmark ─────────────────────────────────────────────────────────────────
 
 function Check() {
   return (
@@ -73,7 +69,6 @@ export function ClusterSelector() {
   const [open, setOpen] = useState(false)
   const containerRef = useRef<HTMLDivElement>(null)
 
-  // Close on outside click
   useEffect(() => {
     if (!open) return
     function onMouseDown(e: MouseEvent) {
@@ -85,7 +80,6 @@ export function ClusterSelector() {
     return () => document.removeEventListener('mousedown', onMouseDown)
   }, [open])
 
-  // Close on Escape
   useEffect(() => {
     if (!open) return
     function onKey(e: KeyboardEvent) {
@@ -100,28 +94,27 @@ export function ClusterSelector() {
     switchClusterContext(ctx, setActiveContext, setHealth).catch(console.error)
   }
 
+  // healthMap is keyed by displayName (unique per cluster, even when contextName is "local" for all).
   const activeHealth: ClusterHealth =
-    activeContext ? (healthMap[activeContext.name] ?? 'unknown') : 'unknown'
+    activeContext ? (healthMap[activeContext.displayName] ?? 'unknown') : 'unknown'
 
   const activeLabel = activeContext
-    ? activeContext.name.length > 24
-      ? activeContext.name.slice(0, 22) + '…'
-      : activeContext.name
+    ? activeContext.displayName.length > 24
+      ? activeContext.displayName.slice(0, 22) + '…'
+      : activeContext.displayName
     : 'No cluster'
 
   return (
     <div className="flex items-center gap-2 shrink-0">
-      {/* Label */}
       <span className="text-[10px] font-mono font-semibold tracking-[0.15em] text-text-muted uppercase select-none">
         Cluster:
       </span>
 
-      {/* Button + dropdown wrapper */}
       <div ref={containerRef} className="relative">
-        {/* Trigger */}
         <button
           onClick={() => setOpen((o) => !o)}
-          title={activeContext?.name}
+          // Show contextName in tooltip so user can see the underlying k8s context
+          title={activeContext ? `${activeContext.displayName} (context: ${activeContext.contextName})` : undefined}
           className={cn(
             'flex items-center gap-2 h-7 px-3 rounded',
             'w-[220px] font-mono text-xs',
@@ -138,7 +131,6 @@ export function ClusterSelector() {
           <Chevron open={open} />
         </button>
 
-        {/* Dropdown list */}
         {open && (
           <div
             className={cn(
@@ -154,15 +146,17 @@ export function ClusterSelector() {
               </div>
             ) : (
               availableContexts.map((ctx) => {
-                const health: ClusterHealth = healthMap[ctx.name] ?? 'unknown'
-                const isActive = activeContext?.name === ctx.name
+                // healthMap keyed by displayName — unique even when contextName is "local" for all
+                const health: ClusterHealth = healthMap[ctx.displayName] ?? 'unknown'
+                const isActive = activeContext?.displayName === ctx.displayName
                 const label =
-                  ctx.name.length > 26 ? ctx.name.slice(0, 24) + '…' : ctx.name
+                  ctx.displayName.length > 26 ? ctx.displayName.slice(0, 24) + '…' : ctx.displayName
                 return (
                   <button
-                    key={ctx.name}
+                    // sourceFile is always unique — safe key even with duplicate contextNames
+                    key={ctx.sourceFile}
                     onClick={() => handleSelect(ctx)}
-                    title={ctx.name}
+                    title={`${ctx.displayName} (context: ${ctx.contextName})`}
                     className={cn(
                       'w-full flex items-center gap-2 px-3 py-1.5',
                       'text-xs font-mono text-left transition-colors duration-75',

@@ -84,17 +84,17 @@ export default function App() {
       // Load contexts first so we can pass the active context's source file to
       // the proxy — a single-file --kubeconfig avoids path-separator issues.
       let sourceFile: string | undefined
-      let context: string | undefined
+      let contextName: string | undefined
       try {
         const contexts = await invoke<KubeContext[]>('get_kubeconfig_contexts')
         const active = contexts.find((c) => c.isActive)
         sourceFile = active?.sourceFile
-        context = active?.name
+        contextName = active?.contextName
       } catch {
         // Non-fatal: proxy will start without --kubeconfig / --context.
       }
 
-      await invoke('start_kubectl_proxy', { sourceFile, context })
+      await invoke('start_kubectl_proxy', { sourceFile, contextName })
       // Give kubectl proxy ~400 ms to start listening on :8001.
       setTimeout(() => setProxyReady(true), 400)
     }

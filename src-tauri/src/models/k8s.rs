@@ -5,15 +5,21 @@ use std::collections::HashMap;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct KubeContext {
-    pub name: String,
+    /// Derived from the kubeconfig filename: "config.eagle-i-orc" → "eagle-i-orc".
+    /// Falls back to the context name when the file is just "config".
+    /// This is the value shown in the UI.
+    pub display_name: String,
+    /// The actual context name stored inside the kubeconfig file (e.g. "local").
+    /// Always passed as --context to kubectl subprocesses.
+    pub context_name: String,
+    /// Absolute path of the kubeconfig file that owns this context.
+    /// Always passed as --kubeconfig to kubectl subprocesses.
+    pub source_file: String,
     pub cluster: String,
     pub user: String,
-    pub namespace: Option<String>,
     pub is_active: bool,
-    /// API server URL — used for health checks and direct kube-rs client construction
+    /// API server URL — used for health checks
     pub server_url: Option<String>,
-    /// Absolute path of the kubeconfig file that contains this context
-    pub source_file: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

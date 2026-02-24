@@ -74,8 +74,14 @@ export function ExecPanel() {
     Promise.all([
       listen<string>('exec-output', (e) => {
         if (!active) return
-        term.writeln(e.payload)
-        if (e.payload === 'ready') term.write('$ ')
+        if (e.payload === 'ready') {
+          // Startup probe confirmed shell is alive — show initial prompt.
+          term.write('$ ')
+        } else {
+          // Write the output line then a fresh prompt for the next command.
+          term.writeln(e.payload)
+          term.write('\r\n$ ')
+        }
       }),
       listen<string>('exec-error',  (e) => { if (active) term.writeln(`\x1b[31m${e.payload}\x1b[0m`) }),
       listen<null>  ('exec-done',   ()  => {
@@ -95,9 +101,16 @@ export function ExecPanel() {
       })
     })
 
-    // Forward xterm.js keystrokes → backend stdin pipe.
-    // Replace \r with \n: xterm sends \r on Enter, Linux shells need \n.
+    // Forward keystrokes to the backend with local echo so the user sees
+    // what they type (no TTY means the shell won't echo input itself).
     const onData = term.onData((data) => {
+      if (data === '\r') {
+        term.write('\r\n')          // Enter — move to new line
+      } else if (data === '\x7f') {
+        term.write('\b \b')         // Backspace — erase last character
+      } else {
+        term.write(data)            // Echo the character immediately
+      }
       invoke('send_exec_input', { input: data.replace(/\r/g, '\n') }).catch(() => {})
     })
 

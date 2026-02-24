@@ -41,6 +41,11 @@ export function ExecPanel() {
   const containerRef    = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
+    console.log('[exec] useEffect fired', {
+      selectedPod,
+      activeContext,
+      execSessionKey,
+    })
     const el = containerRef.current
     if (!el || !selectedPod || !activeContext) return
 
@@ -84,12 +89,14 @@ export function ExecPanel() {
       if (!active) { fns.forEach((f) => f()); return }
       unlisten.push(...fns)
 
+      console.log('[exec] calling invoke exec_into_pod')
       invoke('exec_into_pod', {
         name:        selectedPod.name,
         namespace:   selectedPod.namespace,
         sourceFile:  activeContext.sourceFile,
         contextName: activeContext.contextName,
       }).catch((err: unknown) => {
+        console.error('[exec] invoke failed:', err)
         if (active) term.writeln(`\r\n\x1b[31mError: ${String(err)}\x1b[0m`)
       })
     })
@@ -102,6 +109,7 @@ export function ExecPanel() {
     // ── Cleanup ───────────────────────────────────────────────────────────────
 
     return () => {
+      console.log('[exec] cleanup fired')
       active = false
       onData.dispose()
       ro.disconnect()

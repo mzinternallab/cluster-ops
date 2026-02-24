@@ -47,7 +47,7 @@ function SortIcon({ col, sortKey, sortDir }: SortIconProps) {
 
 export function PodTable() {
   const { data: pods, isLoading, error } = usePods()
-  const { selectedPod, setSelectedPod, openOutputPanel } = useUIStore()
+  const { selectedPod, setSelectedPod, openOutputPanel, incrementExecSessionKey } = useUIStore()
   // Read activeNamespace directly so the client-side filter is applied
   // immediately — including while keepPreviousData is serving the old list.
   const activeNamespace = useNamespaceStore((s) => s.activeNamespace)
@@ -154,7 +154,7 @@ export function PodTable() {
                   onSelect={() => setSelectedPod(pod)}
                   onDescribe={() => { setSelectedPod(pod); openOutputPanel('describe') }}
                   onLogs={() => { setSelectedPod(pod); openOutputPanel('logs') }}
-                  onExec={() => { setSelectedPod(pod); openOutputPanel('exec') }}
+                  onExec={() => { incrementExecSessionKey(); setSelectedPod(pod); openOutputPanel('exec') }}
                 />
               ))
             )}

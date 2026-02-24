@@ -36,7 +36,7 @@ const TERM_THEME = {
 // ── ExecPanel ─────────────────────────────────────────────────────────────────
 
 export function ExecPanel() {
-  const { selectedPod } = useUIStore()
+  const { selectedPod, execSessionKey } = useUIStore()
   const activeContext   = useClusterStore((s) => s.activeContext)
   const containerRef    = useRef<HTMLDivElement>(null)
 
@@ -110,7 +110,7 @@ export function ExecPanel() {
     }
   // Re-run when the target pod / cluster changes.
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedPod?.name, selectedPod?.namespace, activeContext?.sourceFile, activeContext?.contextName])
+  }, [selectedPod?.name, selectedPod?.namespace, activeContext?.sourceFile, activeContext?.contextName, execSessionKey])
 
   return (
     <div

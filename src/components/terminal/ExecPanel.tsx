@@ -91,9 +91,10 @@ export function ExecPanel() {
       })
     })
 
-    // Forward xterm.js keystrokes → PTY master writer on the backend.
+    // Forward xterm.js keystrokes → backend stdin pipe.
+    // Replace \r with \n: xterm sends \r on Enter, Linux shells need \n.
     const onData = term.onData((data) => {
-      invoke('send_exec_input', { input: data }).catch(() => {})
+      invoke('send_exec_input', { input: data.replace(/\r/g, '\n') }).catch(() => {})
     })
 
     // ── Cleanup ───────────────────────────────────────────────────────────────

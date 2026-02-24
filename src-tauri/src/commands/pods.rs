@@ -258,7 +258,7 @@ pub async fn exec_into_pod(
     let ps1_bytes: &[u8] = b"export PS1='$ '\n";
     eprintln!("[exec-stdin] writing: {:?}", ps1_bytes);
     stdin.write_all(ps1_bytes).map_err(|e| format!("stdin init: {e}"))?;
-    let ready_bytes: &[u8] = b"echo ready\n";
+    let ready_bytes: &[u8] = b"echo ''\n";
     eprintln!("[exec-stdin] writing: {:?}", ready_bytes);
     stdin.write_all(ready_bytes).map_err(|e| format!("stdin init: {e}"))?;
     stdin.flush().map_err(|e| format!("stdin flush: {e}"))?;

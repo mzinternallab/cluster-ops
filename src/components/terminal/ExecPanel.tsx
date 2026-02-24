@@ -72,7 +72,11 @@ export function ExecPanel() {
 
     // Register listeners BEFORE invoking to guarantee no bytes are missed.
     Promise.all([
-      listen<string>('exec-output', (e) => { if (active) term.writeln(e.payload) }),
+      listen<string>('exec-output', (e) => {
+        if (!active) return
+        term.writeln(e.payload)
+        if (e.payload === 'ready') term.write('$ ')
+      }),
       listen<string>('exec-error',  (e) => { if (active) term.writeln(`\x1b[31m${e.payload}\x1b[0m`) }),
       listen<null>  ('exec-done',   ()  => {
         if (active) term.writeln('\r\n\x1b[2m[session ended]\x1b[0m')

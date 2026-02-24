@@ -239,7 +239,7 @@ pub async fn exec_into_pod(
         .map(|p| p.to_string_lossy().to_string())
         .unwrap_or_else(|_| "kubectl".to_string());
 
-    let (writer, reader, child) = tokio::task::spawn_blocking(move || {
+    let (writer, reader, child, slave) = tokio::task::spawn_blocking(move || {
         let pty_system = portable_pty::native_pty_system();
         let pty_pair = pty_system.openpty(portable_pty::PtySize {
             rows: 24, cols: 80,
@@ -263,21 +263,28 @@ pub async fn exec_into_pod(
         let writer = pty_pair.master.take_writer()
             .map_err(|e| e.to_string())?;
 
+        // Move slave out so it can be kept alive in the reader closure.
+        let slave = pty_pair.slave;
+
         eprintln!("[exec] PTY created and command spawned");
-        Ok::<_, String>((writer, reader, child))
+        Ok::<_, String>((writer, reader, child, slave))
     }).await.map_err(|e| e.to_string())??;
 
-    // Store writer + child in state.  child must stay alive or the process exits.
+    // Store only the writer in state so send_exec_input can forward keystrokes.
     {
         let mut guard = state.0.lock().map_err(|e| e.to_string())?;
-        *guard = Some(crate::PtySession { writer, child });
+        *guard = Some(writer);
     }
 
     eprintln!("[exec] writer stored, starting reader loop");
 
-    // Read PTY output in background
+    // Read PTY output in background.
+    // child and slave are moved into this closure so they stay alive for the
+    // entire session — dropping either would kill the process or close the PTY.
     let app_clone = app.clone();
     tokio::task::spawn_blocking(move || {
+        let _child = child;   // keeps kubectl exec process alive
+        let _slave = slave;   // keeps PTY slave fd open
         let mut reader = reader;
         let mut buf = [0u8; 1024];
         loop {
@@ -312,11 +319,11 @@ pub async fn send_exec_input(
     state: State<'_, crate::PtyState>,
 ) -> Result<(), String> {
     let mut guard = state.0.lock().map_err(|e| e.to_string())?;
-    if let Some(ref mut session) = *guard {
-        session.writer
+    if let Some(ref mut writer) = *guard {
+        writer
             .write_all(input.as_bytes())
             .map_err(|e| format!("PTY write error: {e}"))?;
-        session.writer
+        writer
             .flush()
             .map_err(|e| format!("PTY flush error: {e}"))?;
     }

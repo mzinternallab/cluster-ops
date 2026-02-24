@@ -254,8 +254,13 @@ pub async fn exec_into_pod(
 
     // Write init commands before storing stdin so the shell produces a prompt.
     let mut stdin = child.stdin.take().ok_or("no stdin")?;
-    stdin.write_all(b"export PS1='$ '\n").map_err(|e| format!("stdin init: {e}"))?;
-    stdin.write_all(b"echo ready\n").map_err(|e| format!("stdin init: {e}"))?;
+    eprintln!("[exec-stdin] about to write startup commands");
+    let ps1_bytes: &[u8] = b"export PS1='$ '\n";
+    eprintln!("[exec-stdin] writing: {:?}", ps1_bytes);
+    stdin.write_all(ps1_bytes).map_err(|e| format!("stdin init: {e}"))?;
+    let ready_bytes: &[u8] = b"echo ready\n";
+    eprintln!("[exec-stdin] writing: {:?}", ready_bytes);
+    stdin.write_all(ready_bytes).map_err(|e| format!("stdin init: {e}"))?;
     stdin.flush().map_err(|e| format!("stdin flush: {e}"))?;
 
     // Store stdin so send_exec_input can forward keystrokes to the shell.
@@ -298,6 +303,7 @@ pub async fn exec_into_pod(
 #[tauri::command]
 pub async fn send_exec_input(input: String) -> Result<(), String> {
     let clean_input = input.replace('\r', "\n");
+    eprintln!("[exec-stdin] writing: {:?}", clean_input.as_bytes());
     let mut guard = EXEC_STDIN.lock().map_err(|e| e.to_string())?;
     if let Some(ref mut stdin) = *guard {
         stdin.write_all(clean_input.as_bytes()).map_err(|e| format!("stdin write: {e}"))?;

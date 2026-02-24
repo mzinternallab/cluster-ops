@@ -302,12 +302,11 @@ pub async fn exec_into_pod(
 /// followed by \n so the shell processes it as a complete line.
 #[tauri::command]
 pub async fn send_exec_input(input: String) -> Result<(), String> {
-    let clean_input = input.replace('\r', "\n");
+    let clean_input = input.replace('\r', "");
     eprintln!("[exec-stdin] writing: {:?}", clean_input.as_bytes());
     let mut guard = EXEC_STDIN.lock().map_err(|e| e.to_string())?;
     if let Some(ref mut stdin) = *guard {
         stdin.write_all(clean_input.as_bytes()).map_err(|e| format!("stdin write: {e}"))?;
-        stdin.write_all(b"\n").map_err(|e| format!("stdin newline: {e}"))?;
         stdin.flush().map_err(|e| format!("stdin flush: {e}"))?;
     }
     Ok(())

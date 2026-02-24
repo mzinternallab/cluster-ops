@@ -221,68 +221,61 @@ pub async fn exec_into_pod(
     context_name: String,
     state: State<'_, crate::PtyState>,
 ) -> Result<(), String> {
-    let kubectl = which::which("kubectl")
-        .map(|p| p.to_string_lossy().to_string())
-        .unwrap_or_else(|_| "kubectl".to_string());
+    eprintln!("[exec] START");
 
-    eprintln!(
-        "[exec] {kubectl} exec -it {name} -n {namespace} \
-         --kubeconfig={source_file} --context={context_name} -- /bin/sh"
-    );
-
-    // Drop any previous PTY writer so the old session is fully closed
-    // before opening a new one.
+    // Clear previous PTY
     {
         let mut guard = state.0.lock().map_err(|e| e.to_string())?;
         *guard = None;
     }
-    tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
 
-    let pty_system = portable_pty::native_pty_system();
+    eprintln!("[exec] creating PTY in spawn_blocking");
 
-    let pty_pair = pty_system
-        .openpty(portable_pty::PtySize {
-            rows: 24,
-            cols: 80,
-            pixel_width: 0,
-            pixel_height: 0,
-        })
-        .map_err(|e| e.to_string())?;
+    let name2 = name.clone();
+    let namespace2 = namespace.clone();
+    let source_file2 = source_file.clone();
+    let context_name2 = context_name.clone();
+    let kubectl = which::which("kubectl")
+        .map(|p| p.to_string_lossy().to_string())
+        .unwrap_or_else(|_| "kubectl".to_string());
 
-    let mut cmd = portable_pty::CommandBuilder::new(&kubectl);
-    cmd.args([
-        "exec", "-it", &name, "-n", &namespace,
-        &format!("--kubeconfig={source_file}"),
-        &format!("--context={context_name}"),
-        "--", "/bin/sh",
-    ]);
+    let (writer, reader) = tokio::task::spawn_blocking(move || {
+        let pty_system = portable_pty::native_pty_system();
+        let pty_pair = pty_system.openpty(portable_pty::PtySize {
+            rows: 24, cols: 80,
+            pixel_width: 0, pixel_height: 0,
+        }).map_err(|e| e.to_string())?;
 
-    // Spawn kubectl exec inside the slave PTY.  slave is consumed here;
-    // kubectl inherits the slave file descriptors so they stay open.
-    let _child = pty_pair
-        .slave
-        .spawn_command(cmd)
-        .map_err(|e| format!("failed to spawn kubectl exec: {e}"))?;
+        let mut cmd = portable_pty::CommandBuilder::new(&kubectl);
+        cmd.args([
+            "exec", "-it", &name2, "-n", &namespace2,
+            &format!("--kubeconfig={source_file2}"),
+            &format!("--context={context_name2}"),
+            "--", "/bin/sh",
+        ]);
+        cmd.env("TERM", "xterm-256color");
 
-    // Get reader and writer from the master side.
-    let reader = pty_pair
-        .master
-        .try_clone_reader()
-        .map_err(|e| format!("failed to clone PTY reader: {e}"))?;
+        let _child = pty_pair.slave.spawn_command(cmd)
+            .map_err(|e| format!("spawn failed: {e}"))?;
 
-    let writer = pty_pair
-        .master
-        .take_writer()
-        .map_err(|e| format!("failed to take PTY writer: {e}"))?;
+        let reader = pty_pair.master.try_clone_reader()
+            .map_err(|e| e.to_string())?;
+        let writer = pty_pair.master.take_writer()
+            .map_err(|e| e.to_string())?;
 
-    // Store writer in managed state so send_exec_input can reach it.
+        eprintln!("[exec] PTY created and command spawned");
+        Ok::<_, String>((writer, reader))
+    }).await.map_err(|e| e.to_string())??;
+
+    // Store writer in state
     {
         let mut guard = state.0.lock().map_err(|e| e.to_string())?;
         *guard = Some(writer);
     }
 
-    // Background thread: read PTY bytes and emit them as events.
-    // spawn_blocking because Read::read is synchronous.
+    eprintln!("[exec] writer stored, starting reader loop");
+
+    // Read PTY output in background
     let app_clone = app.clone();
     tokio::task::spawn_blocking(move || {
         let mut reader = reader;
@@ -292,16 +285,22 @@ pub async fn exec_into_pod(
                 Ok(0) => break,
                 Ok(n) => {
                     let data = String::from_utf8_lossy(&buf[..n]).to_string();
+                    eprintln!("[exec] got {} bytes", n);
                     if app_clone.emit("exec-output", data).is_err() {
                         break;
                     }
                 }
-                Err(_) => break,
+                Err(e) => {
+                    eprintln!("[exec] reader error: {e}");
+                    break;
+                }
             }
         }
+        eprintln!("[exec] reader loop ended");
         let _ = app_clone.emit("exec-done", ());
     });
 
+    eprintln!("[exec] returning Ok");
     Ok(())
 }
 

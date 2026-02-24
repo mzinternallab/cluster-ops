@@ -1,18 +1,12 @@
 use std::collections::HashMap;
-use std::io::{BufRead, BufReader, Write};
-use std::process::{ChildStdin, Command, Stdio};
-use std::sync::Mutex;
+use std::io::{Read, Write};
 
 use chrono::Utc;
 use k8s_openapi::api::core::v1::{Namespace as K8sNamespace, Pod};
 use kube::{api::{DeleteParams, ListParams}, Api, Client, Config};
-use tauri::{AppHandle, Emitter};
+use tauri::{AppHandle, Emitter, State};
 
 use crate::models::k8s::PodSummary;
-
-// Holds the stdin pipe of the running exec session.
-// Replaced each time exec_into_pod is called; written by send_exec_input.
-static EXEC_STDIN: Mutex<Option<ChildStdin>> = Mutex::new(None);
 
 // ── Client ────────────────────────────────────────────────────────────────────
 
@@ -210,18 +204,14 @@ pub async fn delete_pod(name: String, namespace: String) -> Result<(), String> {
     Ok(())
 }
 
-/// Execs into a pod via kubectl with a pipe-based interactive shell.
-///
-/// Spawns `kubectl exec -i … -- /bin/sh` with stdin/stdout/stderr all piped.
-/// Immediately writes PS1 setup and an `echo ready` probe to stdin so the shell
-/// produces visible output without a PTY.  Stdout and stderr are streamed
-/// line-by-line to the frontend via Tauri events.  The frontend sends keystrokes
-/// back via `send_exec_input`.
+/// Opens a PTY, spawns `kubectl exec -it` inside it, and streams raw PTY output
+/// to the frontend via `exec-output` events.  The frontend's xterm.js terminal
+/// writes bytes directly to the PTY master via the `send_exec_input` command,
+/// giving a fully interactive shell session inside the app.
 ///
 /// Events emitted:
-/// - `exec-output` — payload: String — one stdout line
-/// - `exec-error`  — payload: String — one stderr line
-/// - `exec-done`   — payload: null   — session ended
+///   `exec-output` — payload: String  — raw PTY bytes (ANSI sequences included)
+///   `exec-done`   — payload: null    — session ended
 #[tauri::command]
 pub async fn exec_into_pod(
     app: AppHandle,
@@ -229,88 +219,99 @@ pub async fn exec_into_pod(
     namespace: String,
     source_file: String,
     context_name: String,
+    state: State<'_, crate::PtyState>,
 ) -> Result<(), String> {
     let kubectl = which::which("kubectl")
         .map(|p| p.to_string_lossy().to_string())
         .unwrap_or_else(|_| "kubectl".to_string());
 
     eprintln!(
-        "[exec] {kubectl} exec -i {name} -n {namespace} \
+        "[exec] {kubectl} exec -it {name} -n {namespace} \
          --kubeconfig={source_file} --context={context_name} -- /bin/sh"
     );
 
-    let mut child = Command::new(&kubectl)
-        .args([
-            "exec", "-i", &name, "-n", &namespace,
-            &format!("--kubeconfig={source_file}"),
-            &format!("--context={context_name}"),
-            "--", "/bin/sh",
-        ])
-        .env("TERM", "xterm-256color")
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .map_err(|e| format!("kubectl not found: {e}"))?;
+    let pty_system = portable_pty::native_pty_system();
 
-    // Write init commands before storing stdin so the shell produces a prompt.
-    let mut stdin = child.stdin.take().ok_or("no stdin")?;
-    eprintln!("[exec-stdin] about to write startup commands");
-    let term_bytes: &[u8] = b"export TERM=xterm-256color\n";
-    eprintln!("[exec-stdin] writing: {:?}", term_bytes);
-    stdin.write_all(term_bytes).map_err(|e| format!("stdin init: {e}"))?;
-    let ps1_bytes: &[u8] = b"export PS1='$ '\n";
-    eprintln!("[exec-stdin] writing: {:?}", ps1_bytes);
-    stdin.write_all(ps1_bytes).map_err(|e| format!("stdin init: {e}"))?;
-    let ready_bytes: &[u8] = b"echo ''\n";
-    eprintln!("[exec-stdin] writing: {:?}", ready_bytes);
-    stdin.write_all(ready_bytes).map_err(|e| format!("stdin init: {e}"))?;
-    stdin.flush().map_err(|e| format!("stdin flush: {e}"))?;
+    let pty_pair = pty_system
+        .openpty(portable_pty::PtySize {
+            rows: 24,
+            cols: 80,
+            pixel_width: 0,
+            pixel_height: 0,
+        })
+        .map_err(|e| e.to_string())?;
 
-    // Store stdin so send_exec_input can forward keystrokes to the shell.
+    let mut cmd = portable_pty::CommandBuilder::new(&kubectl);
+    cmd.args([
+        "exec", "-it", &name, "-n", &namespace,
+        &format!("--kubeconfig={source_file}"),
+        &format!("--context={context_name}"),
+        "--", "/bin/sh",
+    ]);
+
+    // Spawn kubectl exec inside the slave PTY.  slave is consumed here;
+    // kubectl inherits the slave file descriptors so they stay open.
+    let _child = pty_pair
+        .slave
+        .spawn_command(cmd)
+        .map_err(|e| format!("failed to spawn kubectl exec: {e}"))?;
+
+    // Get reader and writer from the master side.
+    let reader = pty_pair
+        .master
+        .try_clone_reader()
+        .map_err(|e| format!("failed to clone PTY reader: {e}"))?;
+
+    let writer = pty_pair
+        .master
+        .take_writer()
+        .map_err(|e| format!("failed to take PTY writer: {e}"))?;
+
+    // Store writer in managed state so send_exec_input can reach it.
     {
-        let mut guard = EXEC_STDIN.lock().map_err(|e| e.to_string())?;
-        *guard = Some(stdin);
+        let mut guard = state.0.lock().map_err(|e| e.to_string())?;
+        *guard = Some(writer);
     }
 
-    let stdout = child.stdout.take().ok_or("no stdout")?;
-    let stderr = child.stderr.take().ok_or("no stderr")?;
-
-    // Stream stdout in a blocking thread — emit each line as an event.
-    let app_stdout = app.clone();
-    let stdout_task = tokio::task::spawn_blocking(move || {
-        for line in BufReader::new(stdout).lines().flatten() {
-            let _ = app_stdout.emit("exec-output", line);
+    // Background thread: read PTY bytes and emit them as events.
+    // spawn_blocking because Read::read is synchronous.
+    let app_clone = app.clone();
+    tokio::task::spawn_blocking(move || {
+        let mut reader = reader;
+        let mut buf = [0u8; 1024];
+        loop {
+            match reader.read(&mut buf) {
+                Ok(0) => break,
+                Ok(n) => {
+                    let data = String::from_utf8_lossy(&buf[..n]).to_string();
+                    if app_clone.emit("exec-output", data).is_err() {
+                        break;
+                    }
+                }
+                Err(_) => break,
+            }
         }
-    });
-
-    // Stream stderr in a blocking thread — emit each line as an event.
-    let app_stderr = app.clone();
-    let stderr_task = tokio::task::spawn_blocking(move || {
-        for line in BufReader::new(stderr).lines().flatten() {
-            let _ = app_stderr.emit("exec-error", line);
-        }
-    });
-
-    // Once both readers finish (process exited), signal the frontend.
-    tokio::spawn(async move {
-        let _ = tokio::join!(stdout_task, stderr_task);
-        let _ = app.emit("exec-done", ());
+        let _ = app_clone.emit("exec-done", ());
     });
 
     Ok(())
 }
 
-/// Forwards a complete input line from the frontend buffer to the shell stdin.
-/// The frontend buffers keystrokes and appends \n before calling this, so the
-/// input is written as-is.
+/// Forwards raw keystroke bytes from xterm.js to the PTY master writer.
+/// Called on every xterm.js `onData` event.
 #[tauri::command]
-pub async fn send_exec_input(input: String) -> Result<(), String> {
-    eprintln!("[exec-stdin] writing: {:?}", input.as_bytes());
-    let mut guard = EXEC_STDIN.lock().map_err(|e| e.to_string())?;
-    if let Some(ref mut stdin) = *guard {
-        stdin.write_all(input.as_bytes()).map_err(|e| format!("stdin write: {e}"))?;
-        stdin.flush().map_err(|e| format!("stdin flush: {e}"))?;
+pub async fn send_exec_input(
+    input: String,
+    state: State<'_, crate::PtyState>,
+) -> Result<(), String> {
+    let mut guard = state.0.lock().map_err(|e| e.to_string())?;
+    if let Some(ref mut writer) = *guard {
+        writer
+            .write_all(input.as_bytes())
+            .map_err(|e| format!("PTY write error: {e}"))?;
+        writer
+            .flush()
+            .map_err(|e| format!("PTY flush error: {e}"))?;
     }
     Ok(())
 }

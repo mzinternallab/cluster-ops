@@ -39,7 +39,6 @@ export function ExecPanel() {
   const { selectedPod } = useUIStore()
   const activeContext   = useClusterStore((s) => s.activeContext)
   const containerRef    = useRef<HTMLDivElement>(null)
-  const inputBuffer     = useRef('')
 
   useEffect(() => {
     const el = containerRef.current
@@ -72,19 +71,9 @@ export function ExecPanel() {
     const unlisten: (() => void)[] = []
 
     // Register listeners BEFORE invoking to guarantee no bytes are missed.
+    // PTY handles echoing, prompts, and ANSI sequences — write raw output directly.
     Promise.all([
-      listen<string>('exec-output', (e) => {
-        if (!active) return
-        if (e.payload === 'ready') {
-          // Startup probe confirmed shell is alive — show initial prompt.
-          term.write('$ ')
-        } else {
-          // Write the output line then a fresh prompt for the next command.
-          term.writeln(e.payload)
-          term.write('\r\n$ ')
-        }
-      }),
-      listen<string>('exec-error',  (e) => { if (active) term.writeln(`\x1b[31m${e.payload}\x1b[0m`) }),
+      listen<string>('exec-output', (e) => { if (active) term.write(e.payload) }),
       listen<null>  ('exec-done',   ()  => {
         if (active) term.writeln('\r\n\x1b[2m[session ended]\x1b[0m')
       }),
@@ -102,25 +91,9 @@ export function ExecPanel() {
       })
     })
 
-    // Buffer input locally so the shell receives complete lines.
-    // No TTY means the shell won't echo or buffer input itself.
+    // Forward raw xterm.js keystrokes to the PTY master — no buffering needed.
     const onData = term.onData((data) => {
-      if (data === '\r') {
-        // Enter pressed — send the full buffered line
-        term.write('\r\n')
-        invoke('send_exec_input', { input: inputBuffer.current + '\n' }).catch(() => {})
-        inputBuffer.current = ''
-      } else if (data === '\x7f') {
-        // Backspace — remove last character from buffer and erase on screen
-        if (inputBuffer.current.length > 0) {
-          inputBuffer.current = inputBuffer.current.slice(0, -1)
-          term.write('\b \b')
-        }
-      } else {
-        // Regular character — buffer and echo immediately
-        inputBuffer.current += data
-        term.write(data)
-      }
+      invoke('send_exec_input', { input: data }).catch(() => {})
     })
 
     // ── Cleanup ───────────────────────────────────────────────────────────────

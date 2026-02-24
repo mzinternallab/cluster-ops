@@ -1,6 +1,7 @@
 pub mod commands;
 pub mod models;
 
+use std::io::Write;
 use std::process::Child;
 use std::sync::{Arc, Mutex};
 use tauri::Manager;
@@ -8,6 +9,10 @@ use tauri::Manager;
 /// Holds the kubectl proxy child process so it can be killed on exit.
 /// Arc lets us clone out of the tauri State borrow inside the RunEvent::Exit handler.
 pub struct KubectlProxy(pub Arc<Mutex<Option<Child>>>);
+
+/// Holds the PTY master writer so `send_exec_input` can forward keystrokes.
+/// Replaced each time a new exec session starts.
+pub struct PtyState(pub Mutex<Option<Box<dyn Write + Send>>>);
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -23,6 +28,8 @@ pub fn run() {
 
             // Proxy starts as None — the frontend calls start_kubectl_proxy on mount.
             app.manage(KubectlProxy(Arc::new(Mutex::new(None))));
+            // PTY writer starts as None — populated when exec_into_pod is called.
+            app.manage(PtyState(Mutex::new(None)));
 
             Ok(())
         })

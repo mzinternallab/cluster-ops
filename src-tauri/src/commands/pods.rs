@@ -246,6 +246,7 @@ pub async fn exec_into_pod(
             &format!("--context={context_name}"),
             "--", "/bin/sh",
         ])
+        .env("TERM", "xterm-256color")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -255,6 +256,9 @@ pub async fn exec_into_pod(
     // Write init commands before storing stdin so the shell produces a prompt.
     let mut stdin = child.stdin.take().ok_or("no stdin")?;
     eprintln!("[exec-stdin] about to write startup commands");
+    let term_bytes: &[u8] = b"export TERM=xterm-256color\n";
+    eprintln!("[exec-stdin] writing: {:?}", term_bytes);
+    stdin.write_all(term_bytes).map_err(|e| format!("stdin init: {e}"))?;
     let ps1_bytes: &[u8] = b"export PS1='$ '\n";
     eprintln!("[exec-stdin] writing: {:?}", ps1_bytes);
     stdin.write_all(ps1_bytes).map_err(|e| format!("stdin init: {e}"))?;

@@ -10,9 +10,16 @@ use tauri::Manager;
 /// Arc lets us clone out of the tauri State borrow inside the RunEvent::Exit handler.
 pub struct KubectlProxy(pub Arc<Mutex<Option<Child>>>);
 
-/// Holds the PTY master writer so `send_exec_input` can forward keystrokes.
-/// Replaced each time a new exec session starts.
-pub struct PtyState(pub Mutex<Option<Box<dyn Write + Send>>>);
+/// A live exec session.  Both fields must be kept alive together:
+/// dropping `child` kills the process; dropping `writer` closes stdin.
+pub struct PtySession {
+    pub writer: Box<dyn Write + Send>,
+    pub child:  Box<dyn portable_pty::Child + Send + Sync>,
+}
+
+/// Holds the active exec session so `send_exec_input` can forward keystrokes.
+/// Replaced (and previous session dropped) each time a new exec session starts.
+pub struct PtyState(pub Mutex<Option<PtySession>>);
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {

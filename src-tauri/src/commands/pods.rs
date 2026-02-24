@@ -230,6 +230,14 @@ pub async fn exec_into_pod(
          --kubeconfig={source_file} --context={context_name} -- /bin/sh"
     );
 
+    // Drop any previous PTY writer so the old session is fully closed
+    // before opening a new one.
+    {
+        let mut guard = state.0.lock().map_err(|e| e.to_string())?;
+        *guard = None;
+    }
+    tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+
     let pty_system = portable_pty::native_pty_system();
 
     let pty_pair = pty_system

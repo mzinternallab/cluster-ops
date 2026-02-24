@@ -75,7 +75,10 @@ export function ExecPanel() {
     Promise.all([
       listen<string>('exec-output', (e) => { if (active) term.write(e.payload) }),
       listen<null>  ('exec-done',   ()  => {
-        if (active) term.writeln('\r\n\x1b[2m[session ended]\x1b[0m')
+        if (!active) return
+        term.writeln('\r\n\x1b[2m[session ended]\x1b[0m')
+        // Clear terminal after 2 s so the next session starts with a blank slate.
+        setTimeout(() => { if (active) term.clear() }, 2000)
       }),
     ]).then((fns) => {
       if (!active) { fns.forEach((f) => f()); return }

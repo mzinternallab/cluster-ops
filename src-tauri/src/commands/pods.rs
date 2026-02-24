@@ -297,16 +297,15 @@ pub async fn exec_into_pod(
     Ok(())
 }
 
-/// Forwards input from xterm.js to the running exec session's stdin pipe.
-/// Strips \r so Windows CRLF never reaches the shell; each chunk is written
-/// followed by \n so the shell processes it as a complete line.
+/// Forwards a complete input line from the frontend buffer to the shell stdin.
+/// The frontend buffers keystrokes and appends \n before calling this, so the
+/// input is written as-is.
 #[tauri::command]
 pub async fn send_exec_input(input: String) -> Result<(), String> {
-    let clean_input = input.replace('\r', "");
-    eprintln!("[exec-stdin] writing: {:?}", clean_input.as_bytes());
+    eprintln!("[exec-stdin] writing: {:?}", input.as_bytes());
     let mut guard = EXEC_STDIN.lock().map_err(|e| e.to_string())?;
     if let Some(ref mut stdin) = *guard {
-        stdin.write_all(clean_input.as_bytes()).map_err(|e| format!("stdin write: {e}"))?;
+        stdin.write_all(input.as_bytes()).map_err(|e| format!("stdin write: {e}"))?;
         stdin.flush().map_err(|e| format!("stdin flush: {e}"))?;
     }
     Ok(())

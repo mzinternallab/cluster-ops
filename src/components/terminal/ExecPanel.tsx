@@ -39,6 +39,7 @@ export function ExecPanel() {
   const { selectedPod } = useUIStore()
   const activeContext   = useClusterStore((s) => s.activeContext)
   const containerRef    = useRef<HTMLDivElement>(null)
+  const inputBuffer     = useRef('')
 
   useEffect(() => {
     const el = containerRef.current
@@ -101,17 +102,25 @@ export function ExecPanel() {
       })
     })
 
-    // Forward keystrokes to the backend with local echo so the user sees
-    // what they type (no TTY means the shell won't echo input itself).
+    // Buffer input locally so the shell receives complete lines.
+    // No TTY means the shell won't echo or buffer input itself.
     const onData = term.onData((data) => {
       if (data === '\r') {
-        term.write('\r\n')          // Enter — move to new line
+        // Enter pressed — send the full buffered line
+        term.write('\r\n')
+        invoke('send_exec_input', { input: inputBuffer.current + '\n' }).catch(() => {})
+        inputBuffer.current = ''
       } else if (data === '\x7f') {
-        term.write('\b \b')         // Backspace — erase last character
+        // Backspace — remove last character from buffer and erase on screen
+        if (inputBuffer.current.length > 0) {
+          inputBuffer.current = inputBuffer.current.slice(0, -1)
+          term.write('\b \b')
+        }
       } else {
-        term.write(data)            // Echo the character immediately
+        // Regular character — buffer and echo immediately
+        inputBuffer.current += data
+        term.write(data)
       }
-      invoke('send_exec_input', { input: data.replace(/\r/g, '\n') }).catch(() => {})
     })
 
     // ── Cleanup ───────────────────────────────────────────────────────────────

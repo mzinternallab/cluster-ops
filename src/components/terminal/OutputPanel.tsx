@@ -125,7 +125,8 @@ export function OutputPanel() {
 
   useEffect(() => {
     const term = termRef.current
-    if (!term || !selectedPod || !outputPanelMode) return
+    if (!term || !outputPanelMode) return
+    if (outputPanelMode !== 'command' && !selectedPod) return
 
     let active = true
     const stopListeners = () => {

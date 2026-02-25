@@ -100,10 +100,17 @@ export function AIPanel({ output, mode }: AIPanelProps) {
           if (!activeRef.current) return
           stopListeners()
           setStreaming(false)
+          console.log('[ai] raw buffer:', e.payload)
+          const cleanJson = e.payload
+            .replace(/^```json\s*/i, '')
+            .replace(/^```\s*/i, '')
+            .replace(/\s*```$/i, '')
+            .trim()
           try {
-            const parsed: AIAnalysisResponse = JSON.parse(e.payload)
+            const parsed: AIAnalysisResponse = JSON.parse(cleanJson)
             setInsights(parsed.insights ?? [])
-          } catch {
+          } catch (err) {
+            console.error('[ai] parse failed. raw response:', e.payload)
             setError('Failed to parse AI response — check that the model returned valid JSON')
           }
         }),

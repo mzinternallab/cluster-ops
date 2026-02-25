@@ -62,20 +62,16 @@ function InsightCard({ insight }: { insight: AIInsight }) {
 interface AIPanelProps {
   output: string
   mode: 'describe' | 'logs'
-  analyzeKey?: number
-  onAnalyze?: () => void
-  onStreamingChange?: (streaming: boolean) => void
 }
 
-export function AIPanel({ output, mode, analyzeKey = 0, onAnalyze, onStreamingChange }: AIPanelProps) {
+export function AIPanel({ output, mode }: AIPanelProps) {
   const [streaming, setStreaming] = useState(false)
   const [insights, setInsights]   = useState<AIInsight[]>([])
   const [error, setError]         = useState<string | null>(null)
 
-  const activeRef      = useRef(false)
-  const unlistensRef   = useRef<(() => void)[]>([])
-  const analyzedRef    = useRef('')
-  const analyzedKeyRef = useRef(-1)
+  const activeRef    = useRef(false)
+  const unlistensRef = useRef<(() => void)[]>([])
+  const analyzedRef  = useRef('')  // last output we ran analysis on
 
   // ── Listener cleanup ─────────────────────────────────────────────────────
 
@@ -104,6 +100,9 @@ export function AIPanel({ output, mode, analyzeKey = 0, onAnalyze, onStreamingCh
           if (!activeRef.current) return
           stopListeners()
           setStreaming(false)
+          console.log('[ai] raw buffer length:', e.payload.length)
+          console.log('[ai] raw buffer first 500 chars:', e.payload.substring(0, 500))
+          console.log('[ai] raw buffer last 200 chars:', e.payload.substring(e.payload.length - 200))
           const extractJson = (raw: string): string => {
             // Try to extract from markdown code fence first
             const fenceMatch = raw.match(/```(?:json)?\s*([\s\S]*?)```/)
@@ -131,11 +130,7 @@ export function AIPanel({ output, mode, analyzeKey = 0, onAnalyze, onStreamingCh
       }
       unlistensRef.current = uls
 
-      console.log('[ai] output length:', out.length)
-      console.log('[ai] output first 200 chars:', out.substring(0, 200))
-      console.log('[ai] mode:', m)
       await invoke('analyze_with_ai', { output: out, mode: m })
-      console.log('[ai] invoke returned ok')
     } catch (err: unknown) {
       if (!activeRef.current) return
       stopListeners()
@@ -144,18 +139,19 @@ export function AIPanel({ output, mode, analyzeKey = 0, onAnalyze, onStreamingCh
     }
   }, [stopListeners])
 
-  // ── Notify parent of streaming state changes ─────────────────────────────
+  // ── Auto-analyze when fresh output arrives ───────────────────────────────
 
   useEffect(() => {
-    onStreamingChange?.(streaming)
-  }, [streaming, onStreamingChange])
+    if (output && output !== analyzedRef.current) {
+      runAnalysis(output, mode)
+    }
+  }, [output, mode, runAnalysis])
 
   // ── Reset insights when mode changes ────────────────────────────────────
 
   useEffect(() => {
     stopListeners()
     analyzedRef.current = ''
-    analyzedKeyRef.current = -1
     setInsights([])
     setError(null)
     setStreaming(false)
@@ -165,7 +161,7 @@ export function AIPanel({ output, mode, analyzeKey = 0, onAnalyze, onStreamingCh
 
   useEffect(() => () => stopListeners(), [stopListeners])
 
-  // ── Re-analyze handler (internal header button) ───────────────────────────
+  // ── Re-analyze handler ───────────────────────────────────────────────────
 
   const handleReanalyze = () => {
     if (!output || streaming) return
@@ -226,22 +222,12 @@ export function AIPanel({ output, mode, analyzeKey = 0, onAnalyze, onStreamingCh
           </div>
         )}
 
-        {/* Prompt — no analysis triggered yet */}
-        {!streaming && !error && insights.length === 0 && (
-          <div className="flex flex-col items-center justify-center h-full gap-3 text-center px-2">
-            <span className="text-[#7a7adc] text-2xl leading-none">✦</span>
-            <p className="text-xs text-text-muted leading-relaxed">
-              Click Analyze to run AI analysis
-            </p>
-            {onAnalyze && (
-              <button
-                onClick={onAnalyze}
-                className="h-6 px-3 rounded text-xxs font-mono bg-[#7a7adc]/20 text-[#7a7adc] border border-[#7a7adc]/40 hover:bg-[#7a7adc]/30 transition-colors"
-              >
-                ✦ Analyze
-              </button>
-            )}
-          </div>
+        {/* Empty — no output yet */}
+        {!streaming && !error && insights.length === 0 && !output && (
+          <p className="text-xs text-text-muted leading-relaxed">
+            Run <span className="text-accent font-mono">describe</span> or view{' '}
+            <span className="text-accent font-mono">logs</span> to get AI analysis.
+          </p>
         )}
 
         {/* Insight cards */}

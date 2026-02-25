@@ -143,6 +143,7 @@ export function OutputPanel() {
 
     // command mode: register listeners and wait for CommandBar to invoke run_kubectl
     if (outputPanelMode === 'command') {
+      console.log('[output] command mode active, registering listeners')
       setIsStreaming(true)
       Promise.all([
         listen<string>('command-output-line', (e) => {

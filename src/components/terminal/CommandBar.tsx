@@ -7,6 +7,7 @@ import { invoke } from '@tauri-apps/api/core'
 import { cn } from '@/lib/utils'
 import { useUIStore } from '@/store/uiStore'
 import { useClusterStore } from '@/store/clusterStore'
+import { useNamespaceStore } from '@/store/namespaceStore'
 
 // ── Completion data ───────────────────────────────────────────────────────────
 
@@ -21,8 +22,15 @@ const RESOURCE_TYPES = [
   'ingresses', 'namespaces', 'nodes', 'persistentvolumeclaims',
 ]
 
-function getCompletions(input: string): string[] {
+function getCompletions(input: string, namespaces: string[]): string[] {
   const t = input.trimStart()
+  // "-n " or "--namespace " → all namespaces
+  if (/\s-n\s+$/i.test(t) || /\s--namespace\s+$/i.test(t)) return namespaces
+  // "-n partial" → filtered namespaces
+  const nsMatch = t.match(/\s-n\s+(\S+)$/i) ?? t.match(/\s--namespace\s+(\S+)$/i)
+  if (nsMatch) {
+    return namespaces.filter((ns) => ns.startsWith(nsMatch[1]) && ns !== nsMatch[1])
+  }
   // "kubectl get " → resource types
   if (/^kubectl\s+get\s+$/i.test(t)) return RESOURCE_TYPES
   // "kubectl " (just the word) → subcommands
@@ -46,6 +54,7 @@ export function CommandBar() {
     commandHistory,
   } = useUIStore()
   const activeContext = useClusterStore((s) => s.activeContext)
+  const namespaces    = useNamespaceStore((s) => s.availableNamespaces)
 
   const [input, setInput]                   = useState('')
   const [completions, setCompletions]       = useState<string[]>([])
@@ -137,7 +146,7 @@ export function CommandBar() {
 
       if (!showCompletions) {
         // First Tab press — compute completions from current input
-        const computed = getCompletions(input)
+        const computed = getCompletions(input, namespaces)
         if (computed.length === 0) return
         baseInputRef.current = input
         setCompletions(computed)

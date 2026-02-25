@@ -58,7 +58,7 @@ pub async fn analyze_with_ai(
 
     let body = serde_json::json!({
         "model": "claude-sonnet-4-6",
-        "max_tokens": 1024,
+        "max_tokens": 4096,
         "stream": true,
         "messages": [
             {"role": "user", "content": prompt}

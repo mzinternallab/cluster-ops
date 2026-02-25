@@ -103,17 +103,23 @@ export function AIPanel({ output, mode }: AIPanelProps) {
           console.log('[ai] raw buffer length:', e.payload.length)
           console.log('[ai] raw buffer first 500 chars:', e.payload.substring(0, 500))
           console.log('[ai] raw buffer last 200 chars:', e.payload.substring(e.payload.length - 200))
-          const cleanJson = e.payload
-            .replace(/^```json\s*/i, '')
-            .replace(/^```\s*/i, '')
-            .replace(/\s*```$/i, '')
-            .trim()
+          const extractJson = (raw: string): string => {
+            // Try to extract from markdown code fence first
+            const fenceMatch = raw.match(/```(?:json)?\s*([\s\S]*?)```/)
+            if (fenceMatch) return fenceMatch[1].trim()
+            // Try to find raw JSON object
+            const jsonMatch = raw.match(/\{[\s\S]*\}/)
+            if (jsonMatch) return jsonMatch[0].trim()
+            // Return as-is and let JSON.parse fail with a useful error
+            return raw.trim()
+          }
+          const cleanJson = extractJson(e.payload)
           try {
             const parsed: AIAnalysisResponse = JSON.parse(cleanJson)
             setInsights(parsed.insights ?? [])
           } catch (err) {
-            console.error('[ai] parse failed. raw response:', e.payload)
-            setError('Failed to parse AI response — check that the model returned valid JSON')
+            console.error('[ai] parse failed. raw:', e.payload)
+            setError('Failed to parse AI response — check console for details')
           }
         }),
       ])

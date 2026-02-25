@@ -100,9 +100,6 @@ export function AIPanel({ output, mode }: AIPanelProps) {
           if (!activeRef.current) return
           stopListeners()
           setStreaming(false)
-          console.log('[ai] raw buffer length:', e.payload.length)
-          console.log('[ai] raw buffer first 500 chars:', e.payload.substring(0, 500))
-          console.log('[ai] raw buffer last 200 chars:', e.payload.substring(e.payload.length - 200))
           const extractJson = (raw: string): string => {
             // Try to extract from markdown code fence first
             const fenceMatch = raw.match(/```(?:json)?\s*([\s\S]*?)```/)

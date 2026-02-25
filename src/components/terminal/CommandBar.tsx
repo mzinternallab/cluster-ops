@@ -170,7 +170,10 @@ export function CommandBar() {
   // ── Render ──────────────────────────────────────────────────────────────────
 
   return (
-    <div className="relative shrink-0 border-y border-border bg-surface">
+    <div
+      className="relative shrink-0 border-y border-border bg-surface"
+      style={{ minHeight: '32px', display: 'block' }}
+    >
 
       {/* Completions popup */}
       {showCompletions && completions.length > 0 && (

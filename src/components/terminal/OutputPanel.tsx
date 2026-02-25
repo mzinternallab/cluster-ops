@@ -168,6 +168,12 @@ export function OutputPanel() {
           if (!active) return
           term.writeln(highlightLine(e.payload))
           logBufferRef.current.push(e.payload)
+
+          // Trigger AI analysis after 50 lines — don't wait for stream end
+          // (stream never ends when follow=true)
+          if (logBufferRef.current.length === 50) {
+            setAiOutput(logBufferRef.current.join('\n'))
+          }
         }),
         listen<string>('pod-log-error', (e) => {
           if (!active) return
@@ -176,7 +182,7 @@ export function OutputPanel() {
         listen<null>('pod-log-done', () => {
           if (!active) return
           setIsStreaming(false)
-          // Pass full log buffer to AI for analysis
+          // Pass full log buffer to AI for analysis (non-follow mode)
           setAiOutput(logBufferRef.current.join('\n'))
         }),
       ]).then((uls) => {
@@ -195,6 +201,14 @@ export function OutputPanel() {
           term.writeln(`${RED}${String(err)}${RESET}`)
           setIsStreaming(false)
         })
+
+        // Fallback: trigger AI with whatever logs arrived in the first 3 s
+        // Covers cases where fewer than 50 lines arrive (sparse logs)
+        setTimeout(() => {
+          if (active && logBufferRef.current.length > 0 && !aiOutput) {
+            setAiOutput(logBufferRef.current.join('\n'))
+          }
+        }, 3000)
       })
     }
 

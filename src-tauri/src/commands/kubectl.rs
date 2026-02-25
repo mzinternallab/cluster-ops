@@ -16,11 +16,6 @@ pub async fn describe_pod(
         .map(|p| p.to_string_lossy().to_string())
         .unwrap_or_else(|_| "kubectl".to_string());
 
-    eprintln!(
-        "[describe] {} describe pod {name} -n {namespace} --kubeconfig={source_file} --context={context_name}",
-        kubectl
-    );
-
     let output = Command::new(&kubectl)
         .args([
             "describe", "pod", &name,
@@ -66,9 +61,6 @@ pub async fn run_kubectl(
     args.push(format!("--kubeconfig={source_file}"));
     args.push(format!("--context={context_name}"));
 
-    eprintln!("[kubectl] running command: {command}");
-    eprintln!("[kubectl] args: {:?}", args);
-
     let output = Command::new(&kubectl)
         .args(&args)
         .output()
@@ -77,9 +69,6 @@ pub async fn run_kubectl(
 
     let stdout = String::from_utf8_lossy(&output.stdout).to_string();
     let stderr = String::from_utf8_lossy(&output.stderr).to_string();
-
-    eprintln!("[kubectl] stdout lines: {}", stdout.lines().count());
-    eprintln!("[kubectl] stderr: {stderr}");
 
     for line in stdout.lines() {
         app.emit("command-output-line", line).map_err(|e| e.to_string())?;

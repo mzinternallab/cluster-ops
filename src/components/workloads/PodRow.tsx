@@ -23,8 +23,8 @@ export function PodRow({ pod, isSelected, onSelect, onDescribe, onLogs, onExec }
     try {
       await invoke('delete_pod', { name: pod.name, namespace: pod.namespace })
       await queryClient.invalidateQueries({ queryKey: ['pods'] })
-    } catch (err) {
-      console.error('delete_pod failed:', err)
+    } catch {
+      // deletion failed silently — pod list will refresh on next poll
     }
   }
 

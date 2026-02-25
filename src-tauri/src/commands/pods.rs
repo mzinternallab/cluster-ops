@@ -221,15 +221,11 @@ pub async fn exec_into_pod(
     context_name: String,
     state: State<'_, crate::PtyState>,
 ) -> Result<(), String> {
-    eprintln!("[exec] START");
-
     // Clear previous PTY
     {
         let mut guard = state.0.lock().map_err(|e| e.to_string())?;
         *guard = None;
     }
-
-    eprintln!("[exec] creating PTY in spawn_blocking");
 
     let name2 = name.clone();
     let namespace2 = namespace.clone();
@@ -266,7 +262,6 @@ pub async fn exec_into_pod(
         // Move slave out so it can be kept alive in the reader closure.
         let slave = pty_pair.slave;
 
-        eprintln!("[exec] PTY created and command spawned");
         Ok::<_, String>((writer, reader, child, slave))
     }).await.map_err(|e| e.to_string())??;
 
@@ -275,8 +270,6 @@ pub async fn exec_into_pod(
         let mut guard = state.0.lock().map_err(|e| e.to_string())?;
         *guard = Some(writer);
     }
-
-    eprintln!("[exec] writer stored, starting reader loop");
 
     // Read PTY output in background.
     // child and slave are moved into this closure so they stay alive for the
@@ -292,22 +285,18 @@ pub async fn exec_into_pod(
                 Ok(0) => break,
                 Ok(n) => {
                     let data = String::from_utf8_lossy(&buf[..n]).to_string();
-                    eprintln!("[exec] got {} bytes", n);
                     if app_clone.emit("exec-output", data).is_err() {
                         break;
                     }
                 }
-                Err(e) => {
-                    eprintln!("[exec] reader error: {e}");
+                Err(_) => {
                     break;
                 }
             }
         }
-        eprintln!("[exec] reader loop ended");
         let _ = app_clone.emit("exec-done", ());
     });
 
-    eprintln!("[exec] returning Ok");
     Ok(())
 }
 

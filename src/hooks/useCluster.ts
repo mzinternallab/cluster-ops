@@ -45,7 +45,7 @@ export function useCluster() {
       await loadNamespaces()
     }
 
-    init().catch(console.error)
+    init().catch(() => {})
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 }

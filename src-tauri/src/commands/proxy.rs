@@ -1,6 +1,4 @@
-use std::io::{BufRead, BufReader};
 use std::process::{Command, Stdio};
-use std::thread;
 use tauri::State;
 use tokio::time::{sleep, Duration};
 
@@ -55,52 +53,26 @@ pub async fn start_kubectl_proxy(
         );
     }
 
-    eprintln!("[proxy] kubectl path: {kubectl_path}");
-    eprintln!("[proxy] spawning: {kubectl_path} {}", args.join(" "));
-
     // ── spawn; drop the MutexGuard before any .await ─────────────────────────
     {
         let mut guard = state.0.lock().map_err(|e| e.to_string())?;
 
         if let Some(mut child) = guard.take() {
-            eprintln!("[proxy] killing previous proxy process");
             let _ = child.kill();
         }
 
-        let mut child = Command::new(&kubectl_path)
+        let child = Command::new(&kubectl_path)
             .args(&args)
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
             .spawn()
             .map_err(|e| format!("failed to spawn kubectl proxy: {e}"))?;
-
-        eprintln!("[proxy] spawned pid {:?}", child.id());
-
-        // Print stdout in real time
-        if let Some(stdout) = child.stdout.take() {
-            thread::spawn(move || {
-                for line in BufReader::new(stdout).lines().flatten() {
-                    eprintln!("[proxy stdout] {line}");
-                }
-            });
-        }
-
-        // Print stderr in real time
-        if let Some(stderr) = child.stderr.take() {
-            thread::spawn(move || {
-                for line in BufReader::new(stderr).lines().flatten() {
-                    eprintln!("[proxy stderr] {line}");
-                }
-            });
-        }
 
         *guard = Some(child);
     } // MutexGuard dropped here — safe to .await below
 
-    // Fixed 2000 ms sleep while we observe raw proxy output
-    eprintln!("[proxy] sleeping 2000ms...");
+    // Wait for the proxy to start listening.
     sleep(Duration::from_millis(2000)).await;
-    eprintln!("[proxy] done sleeping, returning Ok");
 
     Ok(())
 }

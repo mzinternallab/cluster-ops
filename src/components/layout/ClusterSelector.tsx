@@ -91,7 +91,7 @@ export function ClusterSelector() {
 
   function handleSelect(ctx: KubeContext) {
     setOpen(false)
-    switchClusterContext(ctx, setActiveContext, setHealth).catch(console.error)
+    switchClusterContext(ctx, setActiveContext, setHealth).catch(() => {})
   }
 
   // healthMap is keyed by displayName (unique per cluster, even when contextName is "local" for all).

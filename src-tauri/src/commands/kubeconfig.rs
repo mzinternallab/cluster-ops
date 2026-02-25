@@ -56,8 +56,6 @@ pub async fn get_kubeconfig_contexts() -> Result<Vec<KubeContext>, String> {
         .map(|h| h.join(".kube"))
         .ok_or_else(|| "Cannot determine home directory".to_string())?;
 
-    println!("Scanning ~/.kube directory: {}", kube_dir.display());
-
     // ── collect all files whose name starts with "config" ────────────────────
     let mut config_files: Vec<PathBuf> = Vec::new();
     match std::fs::read_dir(&kube_dir) {
@@ -72,13 +70,11 @@ pub async fn get_kubeconfig_contexts() -> Result<Vec<KubeContext>, String> {
                     .and_then(|n| n.to_str())
                     .unwrap_or("");
                 if name.starts_with("config") {
-                    println!("Found file: {name}");
                     config_files.push(path);
                 }
             }
         }
-        Err(e) => {
-            println!("Cannot read ~/.kube directory: {e}");
+        Err(_) => {
             return Ok(vec![]);
         }
     }
@@ -90,17 +86,13 @@ pub async fn get_kubeconfig_contexts() -> Result<Vec<KubeContext>, String> {
         let filename = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
         match Kubeconfig::read_from(path) {
             Ok(cfg) => {
-                println!("Parsed {} contexts from {filename}", cfg.contexts.len());
                 parsed.push((path.clone(), cfg));
             }
-            Err(e) => {
-                println!("Failed to parse {filename}: {e}");
-            }
+            Err(_) => {}
         }
     }
 
     if parsed.is_empty() {
-        println!("Total contexts found: 0");
         return Ok(vec![]);
     }
 
@@ -156,7 +148,6 @@ pub async fn get_kubeconfig_contexts() -> Result<Vec<KubeContext>, String> {
         }
     }
 
-    println!("Total contexts found: {}", contexts.len());
     Ok(contexts)
 }
 

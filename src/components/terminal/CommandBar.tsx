@@ -109,7 +109,7 @@ export function CommandBar() {
         command: cmd,
         sourceFile:  activeContext?.sourceFile  ?? '',
         contextName: activeContext?.contextName ?? '',
-      }).catch(console.error)
+      }).catch(() => {})
       return
     }
 

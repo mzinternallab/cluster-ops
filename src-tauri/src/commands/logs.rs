@@ -42,8 +42,6 @@ pub async fn get_pod_logs(
         args.push("-f".to_string());
     }
 
-    eprintln!("[logs] {} {}", kubectl, args.join(" "));
-
     let mut child = Command::new(&kubectl)
         .args(&args)
         .stdout(Stdio::piped())

@@ -1,107 +1,71 @@
-# cluster-ops
+# ClusterOps
 
-> k9s, but with a beautiful GUI and an AI co-pilot built in.
-
-A native desktop application for Kubernetes operations. Provides a graphical interface for managing multiple clusters, viewing workloads, running kubectl commands, and getting AI-powered analysis of pod output and logs — all from a single unified window.
-
-## Tech Stack
-
-| Layer | Technology |
-|-------|-----------|
-| Desktop shell | Tauri 2.0 |
-| Frontend | React 18 + TypeScript + Vite |
-| Styling | Tailwind CSS v3 + shadcn/ui |
-| State | Zustand + TanStack Query |
-| Backend | Rust (kube-rs, tokio, serde) |
-| AI | Anthropic Claude API (claude-sonnet-4-6) |
+A native desktop Kubernetes management app with AI-powered analysis.
 
 ## Prerequisites
 
-```bash
-# Node.js 20+
-node --version
+- kubectl installed and in PATH
+- kubeconfig files in `~/.kube/` named `config.<clustername>`
+  - Example: `~/.kube/config.eagle-i-orc`, `~/.kube/config.rovi`
+- Anthropic API key (for AI analysis feature)
 
-# Rust toolchain
-rustup --version
+## Setting up the Anthropic API Key
 
-# Linux: GTK + WebKit deps
-sudo apt install libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev librsvg2-dev
+### Windows
+
+**Option 1 — PowerShell:**
+```powershell
+[System.Environment]::SetEnvironmentVariable("ANTHROPIC_API_KEY", "sk-ant-your-key-here", "User")
 ```
 
-## Development
+**Option 2 — GUI:**
+1. Open Start → search "Environment Variables"
+2. Click "Edit the system environment variables"
+3. Click "Environment Variables"
+4. Under "User variables" click "New"
+5. Variable name: `ANTHROPIC_API_KEY`
+6. Variable value: `sk-ant-your-key-here`
+7. Click OK
 
+### macOS / Linux
+
+Add to `~/.bashrc` or `~/.zshrc`:
 ```bash
+export ANTHROPIC_API_KEY="sk-ant-your-key-here"
+```
+
+Then reload:
+```bash
+source ~/.bashrc
+```
+
+## Running the App (Development)
+
+### Windows (PowerShell)
+```powershell
+cd cluster-ops
 npm install
 npm run tauri dev
 ```
 
-## Build
+### macOS / Linux
+```bash
+cd cluster-ops
+npm install
+npm run tauri dev
+```
+
+## Adding a New Cluster
+
+1. Download kubeconfig from Rancher or your cluster provider
+2. Save it to `~/.kube/config.<clustername>`
+   - Example: `~/.kube/config.production`
+3. Restart ClusterOps
+4. New cluster appears automatically in the cluster dropdown
+
+## Building for Production
 
 ```bash
 npm run tauri build
 # Output: src-tauri/target/release/bundle/
 ```
-
-## Tests
-
-```bash
-npm test          # Frontend unit tests (Vitest)
-cargo test        # Rust backend tests (run from src-tauri/)
-```
-
-## Project Structure
-
-```
-src/                      # React frontend
-  components/
-    layout/               # TitleBar, Sidebar, NamespaceBar
-    workloads/            # PodTable, PodRow, StatusBadge
-    terminal/             # OutputPanel, CommandBar
-    ai/                   # AIPanel, AIInsight, AILoader
-    ui/                   # shadcn/ui components
-  views/                  # WorkloadsView, ConfigMapsView, ...
-  hooks/                  # useCluster, usePods, useKubectl, useAI
-  store/                  # Zustand stores (cluster, namespace, ui)
-  types/                  # TypeScript types (kubernetes.ts, ai.ts)
-  styles/                 # globals.css (Tailwind + CSS vars)
-src-tauri/                # Rust backend
-  src/
-    commands/             # Tauri commands (kubeconfig, pods, kubectl, logs, ai)
-    models/               # Rust structs (k8s.rs)
-```
-
-## AI Analysis Setup
-
-cluster-ops uses the Anthropic Claude API for AI-powered pod analysis. Set your API key before launching the app:
-
-```bash
-# Temporary (current shell session only)
-export ANTHROPIC_API_KEY=sk-ant-...
-
-# Permanent — add to your shell profile
-echo 'export ANTHROPIC_API_KEY=sk-ant-...' >> ~/.bashrc   # bash
-echo 'export ANTHROPIC_API_KEY=sk-ant-...' >> ~/.zshrc    # zsh
-
-# macOS: launch from terminal so the env var is inherited
-open -a cluster-ops   # after setting the var in your shell profile
-```
-
-Get an API key at [console.anthropic.com](https://console.anthropic.com).
-
-The AI panel appears automatically when you open **Describe** or **Logs** for any pod. It analyzes the output and returns categorized insights (critical issues, warnings, suggestions) with actionable `kubectl` commands you can copy with one click. Toggle it with the **✦ AI** button in the output panel header.
-
-## Environment Variables
-
-| Variable | Description |
-|----------|-------------|
-| `KUBECONFIG` | Path(s) to kubeconfig file(s), colon-separated |
-| `ANTHROPIC_API_KEY` | Claude API key — required for AI analysis |
-| `KUBEOPS_LOG_LEVEL` | `debug` \| `info` \| `warn` \| `error` (default: `info`) |
-| `KUBEOPS_POLL_MS` | Pod list polling interval in ms (default: `10000`) |
-
-## Build Phases
-
-See [SPEC.md](./SPEC.md) for the full specification and phase build order.
-
-- **Phase 1 (MVP):** Cluster switcher, pod table, kubectl output panel, AI analysis
-- **Phase 2:** ConfigMaps, Secrets, Deployments, Events, Node view, Port Forward, Exec, AI Chat, Helm, Metrics

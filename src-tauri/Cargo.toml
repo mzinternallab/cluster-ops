@@ -29,7 +29,7 @@ serde_yaml = "0.9.34"
 tokio = { version = "1.49.0", features = ["full"] }
 dirs = "6.0.0"
 k8s-openapi = { version = "0.23.0", default-features = false, features = ["v1_30"] }
-reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json", "stream"] }
 http = "1"
 which = "7"
 portable-pty = "0.8"

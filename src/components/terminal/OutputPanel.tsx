@@ -3,13 +3,14 @@ import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import { listen } from '@tauri-apps/api/event'
 import { invoke } from '@tauri-apps/api/core'
-import { X } from 'lucide-react'
+import { Sparkles, X } from 'lucide-react'
 import '@xterm/xterm/css/xterm.css'
 
 import { cn } from '@/lib/utils'
 import { useUIStore } from '@/store/uiStore'
 import { useClusterStore } from '@/store/clusterStore'
 import { ExecPanel } from './ExecPanel'
+import { AIPanel } from '@/components/ai/AIPanel'
 
 // ── ANSI helpers ──────────────────────────────────────────────────────────────
 
@@ -64,17 +65,25 @@ const TERM_THEME = {
 // ── Component ─────────────────────────────────────────────────────────────────
 
 export function OutputPanel() {
-  const { selectedPod, outputPanelMode, closeOutputPanel } = useUIStore()
+  const {
+    selectedPod,
+    outputPanelMode,
+    closeOutputPanel,
+    aiPanelVisible,
+    toggleAIPanel,
+  } = useUIStore()
   const activeContext = useClusterStore((s) => s.activeContext)
 
   const containerRef = useRef<HTMLDivElement>(null)
   const termRef      = useRef<Terminal | null>(null)
   const fitRef       = useRef<FitAddon | null>(null)
   const unlistensRef = useRef<(() => void)[]>([])
+  const logBufferRef = useRef<string[]>([])
 
   const [tailLines,   setTailLines]   = useState<number | null>(200)
   const [follow,      setFollow]      = useState(true)
   const [isStreaming, setIsStreaming] = useState(false)
+  const [aiOutput,    setAiOutput]    = useState('')
 
   // ── Terminal init (once on mount) ────────────────────────────────────────
 
@@ -83,13 +92,13 @@ export function OutputPanel() {
     if (!el) return
 
     const term = new Terminal({
-      theme:       TERM_THEME,
-      fontFamily:  'JetBrains Mono, Cascadia Code, Consolas, monospace',
-      fontSize:    12,
-      lineHeight:  1.4,
-      cursorBlink: false,
+      theme:        TERM_THEME,
+      fontFamily:   'JetBrains Mono, Cascadia Code, Consolas, monospace',
+      fontSize:     12,
+      lineHeight:   1.4,
+      cursorBlink:  false,
       disableStdin: true,
-      scrollback:  10_000,
+      scrollback:   10_000,
     })
 
     const fit = new FitAddon()
@@ -117,7 +126,6 @@ export function OutputPanel() {
     const term = termRef.current
     if (!term || !selectedPod || !outputPanelMode) return
 
-    // Cancel any previous stream and remove listeners
     let active = true
     const stopListeners = () => {
       unlistensRef.current.forEach((fn) => fn())
@@ -126,6 +134,8 @@ export function OutputPanel() {
     stopListeners()
 
     term.clear()
+    setAiOutput('')
+    logBufferRef.current = []
 
     // exec mode is handled entirely by ExecPanel — skip the data-load here
     if (outputPanelMode === 'exec') return
@@ -143,18 +153,32 @@ export function OutputPanel() {
           if (!active) return
           output.split(/\r?\n/).forEach((line) => term.writeln(highlightLine(line)))
           setIsStreaming(false)
+          setAiOutput(output)
         })
         .catch((err: unknown) => {
           if (!active) return
           term.writeln(`${RED}${String(err)}${RESET}`)
           setIsStreaming(false)
         })
+
     } else if (outputPanelMode === 'logs') {
-      // Set up listeners BEFORE invoking so no events are missed
+      // Register listeners BEFORE invoking so no lines are missed
       Promise.all([
-        listen<string>('pod-log-line',  (e) => { if (active) term.writeln(highlightLine(e.payload)) }),
-        listen<string>('pod-log-error', (e) => { if (active) term.writeln(`${RED}${e.payload}${RESET}`) }),
-        listen<null>  ('pod-log-done',  ()  => { if (active) setIsStreaming(false) }),
+        listen<string>('pod-log-line', (e) => {
+          if (!active) return
+          term.writeln(highlightLine(e.payload))
+          logBufferRef.current.push(e.payload)
+        }),
+        listen<string>('pod-log-error', (e) => {
+          if (!active) return
+          term.writeln(`${RED}${e.payload}${RESET}`)
+        }),
+        listen<null>('pod-log-done', () => {
+          if (!active) return
+          setIsStreaming(false)
+          // Pass full log buffer to AI for analysis
+          setAiOutput(logBufferRef.current.join('\n'))
+        }),
       ]).then((uls) => {
         if (!active) { uls.forEach((fn) => fn()); return }
         unlistensRef.current = uls
@@ -185,6 +209,7 @@ export function OutputPanel() {
 
   const isLogs = outputPanelMode === 'logs'
   const isExec = outputPanelMode === 'exec'
+  const showAI = !isExec && outputPanelMode !== null
   const title  = selectedPod
     ? `${selectedPod.namespace}/${selectedPod.name}`
     : ''
@@ -220,7 +245,6 @@ export function OutputPanel() {
         {/* Logs-only controls */}
         {isLogs && (
           <>
-            {/* Tail line selector */}
             <select
               value={tailLines ?? 'all'}
               onChange={(e) => {
@@ -240,7 +264,6 @@ export function OutputPanel() {
               ))}
             </select>
 
-            {/* Follow toggle */}
             <button
               onClick={() => setFollow((f) => !f)}
               className={cn(
@@ -255,6 +278,23 @@ export function OutputPanel() {
           </>
         )}
 
+        {/* AI panel toggle — describe and logs only */}
+        {showAI && (
+          <button
+            onClick={toggleAIPanel}
+            className={cn(
+              'h-5 px-2 rounded text-xxs font-mono border transition-colors shrink-0 flex items-center gap-1',
+              aiPanelVisible
+                ? 'bg-[#7a7adc]/15 text-[#7a7adc] border-[#7a7adc]/40'
+                : 'text-text-muted border-border hover:border-text-muted/40 hover:text-text-primary',
+            )}
+            title="Toggle AI analysis panel"
+          >
+            <Sparkles size={10} />
+            AI
+          </button>
+        )}
+
         {/* Close button */}
         <button
           onClick={closeOutputPanel}
@@ -265,15 +305,27 @@ export function OutputPanel() {
         </button>
       </div>
 
-      {/* xterm.js container — hidden during exec so the terminal stays initialized */}
-      <div
-        ref={containerRef}
-        className={cn('flex-1 overflow-hidden', isExec && 'hidden')}
-        style={{ padding: '4px 8px' }}
-      />
+      {/* Body: terminal + AI panel side by side */}
+      <div className="flex flex-1 overflow-hidden">
 
-      {/* ExecPanel renders its own terminal for interactive exec */}
-      {isExec && <ExecPanel />}
+        {/* xterm.js container — hidden during exec so the terminal stays initialized */}
+        <div
+          ref={containerRef}
+          className={cn('flex-1 overflow-hidden', isExec && 'hidden')}
+          style={{ padding: '4px 8px' }}
+        />
+
+        {/* ExecPanel renders its own terminal for interactive exec */}
+        {isExec && <ExecPanel />}
+
+        {/* AI analysis panel — describe and logs only */}
+        {showAI && aiPanelVisible && (
+          <AIPanel
+            output={aiOutput}
+            mode={outputPanelMode as 'describe' | 'logs'}
+          />
+        )}
+      </div>
     </div>
   )
 }

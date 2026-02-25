@@ -47,7 +47,7 @@ pub fn run() {
             commands::logs::get_pod_logs,
             commands::proxy::start_kubectl_proxy,
             commands::proxy::stop_kubectl_proxy,
-            // commands::ai::analyze_with_ai,       — Step 11
+            commands::ai::analyze_with_ai,
         ])
         .build(tauri::generate_context!())
         .expect("error while running tauri application")

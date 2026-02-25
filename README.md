@@ -70,12 +70,32 @@ src-tauri/                # Rust backend
     models/               # Rust structs (k8s.rs)
 ```
 
+## AI Analysis Setup
+
+cluster-ops uses the Anthropic Claude API for AI-powered pod analysis. Set your API key before launching the app:
+
+```bash
+# Temporary (current shell session only)
+export ANTHROPIC_API_KEY=sk-ant-...
+
+# Permanent — add to your shell profile
+echo 'export ANTHROPIC_API_KEY=sk-ant-...' >> ~/.bashrc   # bash
+echo 'export ANTHROPIC_API_KEY=sk-ant-...' >> ~/.zshrc    # zsh
+
+# macOS: launch from terminal so the env var is inherited
+open -a cluster-ops   # after setting the var in your shell profile
+```
+
+Get an API key at [console.anthropic.com](https://console.anthropic.com).
+
+The AI panel appears automatically when you open **Describe** or **Logs** for any pod. It analyzes the output and returns categorized insights (critical issues, warnings, suggestions) with actionable `kubectl` commands you can copy with one click. Toggle it with the **✦ AI** button in the output panel header.
+
 ## Environment Variables
 
 | Variable | Description |
 |----------|-------------|
 | `KUBECONFIG` | Path(s) to kubeconfig file(s), colon-separated |
-| `ANTHROPIC_API_KEY` | Claude API key (fallback if not in OS keychain) |
+| `ANTHROPIC_API_KEY` | Claude API key — required for AI analysis |
 | `KUBEOPS_LOG_LEVEL` | `debug` \| `info` \| `warn` \| `error` (default: `info`) |
 | `KUBEOPS_POLL_MS` | Pod list polling interval in ms (default: `10000`) |
 

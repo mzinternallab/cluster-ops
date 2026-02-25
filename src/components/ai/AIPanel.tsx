@@ -131,7 +131,11 @@ export function AIPanel({ output, mode, analyzeKey = 0, onAnalyze, onStreamingCh
       }
       unlistensRef.current = uls
 
+      console.log('[ai] output length:', out.length)
+      console.log('[ai] output first 200 chars:', out.substring(0, 200))
+      console.log('[ai] mode:', m)
       await invoke('analyze_with_ai', { output: out, mode: m })
+      console.log('[ai] invoke returned ok')
     } catch (err: unknown) {
       if (!activeRef.current) return
       stopListeners()
@@ -145,15 +149,6 @@ export function AIPanel({ output, mode, analyzeKey = 0, onAnalyze, onStreamingCh
   useEffect(() => {
     onStreamingChange?.(streaming)
   }, [streaming, onStreamingChange])
-
-  // ── Run analysis when output or analyzeKey changes ───────────────────────
-
-  useEffect(() => {
-    if (output && (output !== analyzedRef.current || analyzeKey !== analyzedKeyRef.current)) {
-      analyzedKeyRef.current = analyzeKey
-      runAnalysis(output, mode)
-    }
-  }, [output, mode, runAnalysis, analyzeKey])
 
   // ── Reset insights when mode changes ────────────────────────────────────
 
@@ -232,7 +227,7 @@ export function AIPanel({ output, mode, analyzeKey = 0, onAnalyze, onStreamingCh
         )}
 
         {/* Prompt — no analysis triggered yet */}
-        {!streaming && !error && insights.length === 0 && !output && (
+        {!streaming && !error && insights.length === 0 && (
           <div className="flex flex-col items-center justify-center h-full gap-3 text-center px-2">
             <span className="text-[#7a7adc] text-2xl leading-none">✦</span>
             <p className="text-xs text-text-muted leading-relaxed">

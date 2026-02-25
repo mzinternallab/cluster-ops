@@ -13,4 +13,4 @@ export interface AIAnalysisResponse {
   insights: AIInsight[]
 }
 
-export type AIAnalysisMode = 'describe' | 'logs' | 'exec'
+export type AIAnalysisMode = 'describe' | 'logs' | 'exec' | 'command'

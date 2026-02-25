@@ -43,7 +43,7 @@ pub fn run() {
             commands::pods::exec_into_pod,
             commands::pods::send_exec_input,
             commands::kubectl::describe_pod,
-            // commands::kubectl::run_kubectl,      — Step 13
+            commands::kubectl::run_kubectl,
             commands::logs::get_pod_logs,
             commands::proxy::start_kubectl_proxy,
             commands::proxy::stop_kubectl_proxy,

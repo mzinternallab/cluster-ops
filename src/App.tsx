@@ -42,27 +42,27 @@ function AppContent() {
 
         <div className="flex flex-col flex-1 overflow-hidden">
 
-          {/* Namespace filter bar + kubectl command bar */}
+          {/* Namespace filter bar */}
           <div className="flex items-center bg-surface border-b border-border shrink-0">
             <NamespaceBar />
-            <div className="flex-1" />
-            <CommandBar />
           </div>
 
-          {/* Main content area — shrinks to 50% when output panel opens */}
+          {/* Main content area — shrinks when output panel opens */}
           <div
             className={`flex flex-col overflow-hidden ${
-              outputPanelOpen ? 'flex-[0_0_50%]' : 'flex-1'
+              outputPanelOpen ? 'flex-[0_0_45%]' : 'flex-1'
             }`}
           >
             <ActiveView />
           </div>
 
-          {/* Bottom split: output panel + AI panel (Step 10 + 12) */}
+          {/* Command bar — between pod table and output panel */}
+          <CommandBar />
+
+          {/* Output panel (Step 10) + AI panel (Step 12) */}
           {outputPanelOpen && (
             <div className="flex flex-1 overflow-hidden border-t border-border">
               <OutputPanel />
-              {/* AI panel — Step 12 */}
             </div>
           )}
 

@@ -71,6 +71,7 @@ export function OutputPanel() {
     closeOutputPanel,
     aiPanelVisible,
     toggleAIPanel,
+    commandKey,
   } = useUIStore()
   const activeContext = useClusterStore((s) => s.activeContext)
 
@@ -139,6 +140,29 @@ export function OutputPanel() {
 
     // exec mode is handled entirely by ExecPanel — skip the data-load here
     if (outputPanelMode === 'exec') return
+
+    // command mode: register listeners and wait for CommandBar to invoke run_kubectl
+    if (outputPanelMode === 'command') {
+      setIsStreaming(true)
+      Promise.all([
+        listen<string>('command-output-line', (e) => {
+          if (!active) return
+          term.writeln(highlightLine(e.payload))
+        }),
+        listen<string>('command-output-error', (e) => {
+          if (!active) return
+          term.writeln(`${RED}${e.payload}${RESET}`)
+        }),
+        listen<null>('command-output-done', () => {
+          if (!active) return
+          setIsStreaming(false)
+        }),
+      ]).then((uls) => {
+        if (!active) { uls.forEach((fn) => fn()); return }
+        unlistensRef.current = uls
+      })
+      return
+    }
 
     setIsStreaming(true)
 
@@ -217,14 +241,15 @@ export function OutputPanel() {
       stopListeners()
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedPod?.name, selectedPod?.namespace, outputPanelMode, tailLines, follow])
+  }, [selectedPod?.name, selectedPod?.namespace, outputPanelMode, tailLines, follow, commandKey])
 
   // ── Render ────────────────────────────────────────────────────────────────
 
-  const isLogs = outputPanelMode === 'logs'
-  const isExec = outputPanelMode === 'exec'
-  const showAI = !isExec && outputPanelMode !== null
-  const title  = selectedPod
+  const isLogs    = outputPanelMode === 'logs'
+  const isExec    = outputPanelMode === 'exec'
+  const isCommand = outputPanelMode === 'command'
+  const showAI    = !isExec && !isCommand && outputPanelMode !== null
+  const title     = isCommand ? '' : selectedPod
     ? `${selectedPod.namespace}/${selectedPod.name}`
     : ''
 
@@ -237,8 +262,9 @@ export function OutputPanel() {
         {/* Mode badge */}
         <span className={cn(
           'text-xxs font-mono px-1.5 py-0.5 rounded uppercase tracking-wider shrink-0',
-          isLogs ? 'bg-accent/15 text-accent'
-            : isExec ? 'bg-[#1a1a2e] text-[#7a7adc]'
+          isLogs    ? 'bg-accent/15 text-accent'
+            : isExec    ? 'bg-[#1a1a2e] text-[#7a7adc]'
+            : isCommand ? 'bg-accent/15 text-accent'
             : 'bg-ai-purple/15 text-ai-purple',
         )}>
           {outputPanelMode ?? 'output'}

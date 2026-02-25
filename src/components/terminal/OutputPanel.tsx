@@ -75,16 +75,19 @@ export function OutputPanel() {
   } = useUIStore()
   const activeContext = useClusterStore((s) => s.activeContext)
 
-  const containerRef = useRef<HTMLDivElement>(null)
-  const termRef      = useRef<Terminal | null>(null)
-  const fitRef       = useRef<FitAddon | null>(null)
-  const unlistensRef = useRef<(() => void)[]>([])
-  const logBufferRef = useRef<string[]>([])
+  const containerRef   = useRef<HTMLDivElement>(null)
+  const termRef        = useRef<Terminal | null>(null)
+  const fitRef         = useRef<FitAddon | null>(null)
+  const unlistensRef   = useRef<(() => void)[]>([])
+  const logBufferRef   = useRef<string[]>([])
+  const outputForAIRef = useRef('')
 
   const [tailLines,   setTailLines]   = useState<number | null>(200)
   const [follow,      setFollow]      = useState(true)
   const [isStreaming, setIsStreaming] = useState(false)
   const [aiOutput,    setAiOutput]    = useState('')
+  const [aiStreaming, setAiStreaming] = useState(false)
+  const [analyzeKey,  setAnalyzeKey]  = useState(0)
 
   // ── Terminal init (once on mount) ────────────────────────────────────────
 
@@ -137,6 +140,7 @@ export function OutputPanel() {
 
     term.clear()
     setAiOutput('')
+    outputForAIRef.current = ''
     logBufferRef.current = []
 
     // exec mode is handled entirely by ExecPanel — skip the data-load here
@@ -178,7 +182,7 @@ export function OutputPanel() {
           if (!active) return
           output.split(/\r?\n/).forEach((line) => term.writeln(highlightLine(line)))
           setIsStreaming(false)
-          setAiOutput(output)
+          outputForAIRef.current = output
         })
         .catch((err: unknown) => {
           if (!active) return
@@ -193,12 +197,7 @@ export function OutputPanel() {
           if (!active) return
           term.writeln(highlightLine(e.payload))
           logBufferRef.current.push(e.payload)
-
-          // Trigger AI analysis after 50 lines — don't wait for stream end
-          // (stream never ends when follow=true)
-          if (logBufferRef.current.length === 50) {
-            setAiOutput(logBufferRef.current.join('\n'))
-          }
+          outputForAIRef.current = logBufferRef.current.join('\n')
         }),
         listen<string>('pod-log-error', (e) => {
           if (!active) return
@@ -207,8 +206,7 @@ export function OutputPanel() {
         listen<null>('pod-log-done', () => {
           if (!active) return
           setIsStreaming(false)
-          // Pass full log buffer to AI for analysis (non-follow mode)
-          setAiOutput(logBufferRef.current.join('\n'))
+          outputForAIRef.current = logBufferRef.current.join('\n')
         }),
       ]).then((uls) => {
         if (!active) { uls.forEach((fn) => fn()); return }
@@ -226,14 +224,6 @@ export function OutputPanel() {
           term.writeln(`${RED}${String(err)}${RESET}`)
           setIsStreaming(false)
         })
-
-        // Fallback: trigger AI with whatever logs arrived in the first 3 s
-        // Covers cases where fewer than 50 lines arrive (sparse logs)
-        setTimeout(() => {
-          if (active && logBufferRef.current.length > 0 && !aiOutput) {
-            setAiOutput(logBufferRef.current.join('\n'))
-          }
-        }, 3000)
       })
     }
 
@@ -244,6 +234,15 @@ export function OutputPanel() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedPod?.name, selectedPod?.namespace, outputPanelMode, tailLines, follow, commandKey])
 
+  // ── Analyze handler ───────────────────────────────────────────────────────
+
+  function handleAnalyze() {
+    if (!outputForAIRef.current) return
+    setAiOutput(outputForAIRef.current)
+    setAnalyzeKey((k) => k + 1)
+    if (!aiPanelVisible) toggleAIPanel()
+  }
+
   // ── Render ────────────────────────────────────────────────────────────────
 
   const isLogs    = outputPanelMode === 'logs'
@@ -253,6 +252,15 @@ export function OutputPanel() {
   const title     = isCommand ? '' : selectedPod
     ? `${selectedPod.namespace}/${selectedPod.name}`
     : ''
+
+  // Label shown on the AI button when the panel is open
+  const aiButtonLabel = aiPanelVisible
+    ? aiStreaming
+      ? 'Analyzing…'
+      : aiOutput
+        ? '✦ Re-analyze'
+        : '✦ Analyze'
+    : null
 
   return (
     <div className="flex flex-col h-full overflow-hidden">
@@ -322,17 +330,22 @@ export function OutputPanel() {
         {/* AI panel toggle — describe and logs only */}
         {showAI && (
           <button
-            onClick={toggleAIPanel}
+            onClick={aiPanelVisible ? (aiStreaming ? undefined : handleAnalyze) : toggleAIPanel}
+            disabled={aiPanelVisible && aiStreaming}
             className={cn(
               'h-5 px-2 rounded text-xxs font-mono border transition-colors shrink-0 flex items-center gap-1',
               aiPanelVisible
                 ? 'bg-[#7a7adc]/15 text-[#7a7adc] border-[#7a7adc]/40'
                 : 'text-text-muted border-border hover:border-text-muted/40 hover:text-text-primary',
             )}
-            title="Toggle AI analysis panel"
+            title={aiPanelVisible ? 'Run AI analysis' : 'Open AI analysis panel'}
           >
-            <Sparkles size={10} />
-            AI
+            {aiButtonLabel ?? (
+              <>
+                <Sparkles size={10} />
+                AI
+              </>
+            )}
           </button>
         )}
 
@@ -364,6 +377,9 @@ export function OutputPanel() {
           <AIPanel
             output={aiOutput}
             mode={outputPanelMode as 'describe' | 'logs'}
+            analyzeKey={analyzeKey}
+            onAnalyze={handleAnalyze}
+            onStreamingChange={(s) => setAiStreaming(s)}
           />
         )}
       </div>

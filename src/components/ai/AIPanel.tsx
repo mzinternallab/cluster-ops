@@ -62,16 +62,20 @@ function InsightCard({ insight }: { insight: AIInsight }) {
 interface AIPanelProps {
   output: string
   mode: 'describe' | 'logs'
+  analyzeKey?: number
+  onAnalyze?: () => void
+  onStreamingChange?: (streaming: boolean) => void
 }
 
-export function AIPanel({ output, mode }: AIPanelProps) {
+export function AIPanel({ output, mode, analyzeKey = 0, onAnalyze, onStreamingChange }: AIPanelProps) {
   const [streaming, setStreaming] = useState(false)
   const [insights, setInsights]   = useState<AIInsight[]>([])
   const [error, setError]         = useState<string | null>(null)
 
-  const activeRef    = useRef(false)
-  const unlistensRef = useRef<(() => void)[]>([])
-  const analyzedRef  = useRef('')  // last output we ran analysis on
+  const activeRef      = useRef(false)
+  const unlistensRef   = useRef<(() => void)[]>([])
+  const analyzedRef    = useRef('')
+  const analyzedKeyRef = useRef(-1)
 
   // ── Listener cleanup ─────────────────────────────────────────────────────
 
@@ -136,19 +140,27 @@ export function AIPanel({ output, mode }: AIPanelProps) {
     }
   }, [stopListeners])
 
-  // ── Auto-analyze when fresh output arrives ───────────────────────────────
+  // ── Notify parent of streaming state changes ─────────────────────────────
 
   useEffect(() => {
-    if (output && output !== analyzedRef.current) {
+    onStreamingChange?.(streaming)
+  }, [streaming, onStreamingChange])
+
+  // ── Run analysis when output or analyzeKey changes ───────────────────────
+
+  useEffect(() => {
+    if (output && (output !== analyzedRef.current || analyzeKey !== analyzedKeyRef.current)) {
+      analyzedKeyRef.current = analyzeKey
       runAnalysis(output, mode)
     }
-  }, [output, mode, runAnalysis])
+  }, [output, mode, runAnalysis, analyzeKey])
 
   // ── Reset insights when mode changes ────────────────────────────────────
 
   useEffect(() => {
     stopListeners()
     analyzedRef.current = ''
+    analyzedKeyRef.current = -1
     setInsights([])
     setError(null)
     setStreaming(false)
@@ -158,7 +170,7 @@ export function AIPanel({ output, mode }: AIPanelProps) {
 
   useEffect(() => () => stopListeners(), [stopListeners])
 
-  // ── Re-analyze handler ───────────────────────────────────────────────────
+  // ── Re-analyze handler (internal header button) ───────────────────────────
 
   const handleReanalyze = () => {
     if (!output || streaming) return
@@ -219,12 +231,22 @@ export function AIPanel({ output, mode }: AIPanelProps) {
           </div>
         )}
 
-        {/* Empty — no output yet */}
+        {/* Prompt — no analysis triggered yet */}
         {!streaming && !error && insights.length === 0 && !output && (
-          <p className="text-xs text-text-muted leading-relaxed">
-            Run <span className="text-accent font-mono">describe</span> or view{' '}
-            <span className="text-accent font-mono">logs</span> to get AI analysis.
-          </p>
+          <div className="flex flex-col items-center justify-center h-full gap-3 text-center px-2">
+            <span className="text-[#7a7adc] text-2xl leading-none">✦</span>
+            <p className="text-xs text-text-muted leading-relaxed">
+              Click Analyze to run AI analysis
+            </p>
+            {onAnalyze && (
+              <button
+                onClick={onAnalyze}
+                className="h-6 px-3 rounded text-xxs font-mono bg-[#7a7adc]/20 text-[#7a7adc] border border-[#7a7adc]/40 hover:bg-[#7a7adc]/30 transition-colors"
+              >
+                ✦ Analyze
+              </button>
+            )}
+          </div>
         )}
 
         {/* Insight cards */}

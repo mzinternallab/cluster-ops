@@ -66,7 +66,8 @@ pub async fn run_kubectl(
     args.push(format!("--kubeconfig={source_file}"));
     args.push(format!("--context={context_name}"));
 
-    eprintln!("[kubectl] {} {}", kubectl, args.join(" "));
+    eprintln!("[kubectl] running command: {command}");
+    eprintln!("[kubectl] args: {:?}", args);
 
     let output = Command::new(&kubectl)
         .args(&args)
@@ -76,6 +77,9 @@ pub async fn run_kubectl(
 
     let stdout = String::from_utf8_lossy(&output.stdout).to_string();
     let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+
+    eprintln!("[kubectl] stdout lines: {}", stdout.lines().count());
+    eprintln!("[kubectl] stderr: {stderr}");
 
     for line in stdout.lines() {
         app.emit("command-output-line", line).map_err(|e| e.to_string())?;

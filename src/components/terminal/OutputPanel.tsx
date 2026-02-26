@@ -78,8 +78,9 @@ export function OutputPanel() {
   const containerRef = useRef<HTMLDivElement>(null)
   const termRef      = useRef<Terminal | null>(null)
   const fitRef       = useRef<FitAddon | null>(null)
-  const unlistensRef = useRef<(() => void)[]>([])
-  const logBufferRef = useRef<string[]>([])
+  const unlistensRef   = useRef<(() => void)[]>([])
+  const logBufferRef   = useRef<string[]>([])
+  const outputForAIRef = useRef('')
 
   const [tailLines,   setTailLines]   = useState<number | null>(200)
   const [follow,      setFollow]      = useState(true)
@@ -137,6 +138,7 @@ export function OutputPanel() {
 
     term.clear()
     setAiOutput('')
+    outputForAIRef.current = ''
     logBufferRef.current = []
 
     // exec mode is handled entirely by ExecPanel — skip the data-load here
@@ -178,7 +180,7 @@ export function OutputPanel() {
           if (!active) return
           output.split(/\r?\n/).forEach((line) => term.writeln(highlightLine(line)))
           setIsStreaming(false)
-          setAiOutput(output)
+          outputForAIRef.current = output
         })
         .catch((err: unknown) => {
           if (!active) return
@@ -193,12 +195,7 @@ export function OutputPanel() {
           if (!active) return
           term.writeln(highlightLine(e.payload))
           logBufferRef.current.push(e.payload)
-
-          // Trigger AI analysis after 50 lines — don't wait for stream end
-          // (stream never ends when follow=true)
-          if (logBufferRef.current.length === 50) {
-            setAiOutput(logBufferRef.current.join('\n'))
-          }
+          outputForAIRef.current = logBufferRef.current.join('\n')
         }),
         listen<string>('pod-log-error', (e) => {
           if (!active) return
@@ -207,8 +204,7 @@ export function OutputPanel() {
         listen<null>('pod-log-done', () => {
           if (!active) return
           setIsStreaming(false)
-          // Pass full log buffer to AI for analysis (non-follow mode)
-          setAiOutput(logBufferRef.current.join('\n'))
+          outputForAIRef.current = logBufferRef.current.join('\n')
         }),
       ]).then((uls) => {
         if (!active) { uls.forEach((fn) => fn()); return }
@@ -227,13 +223,6 @@ export function OutputPanel() {
           setIsStreaming(false)
         })
 
-        // Fallback: trigger AI with whatever logs arrived in the first 3 s
-        // Covers cases where fewer than 50 lines arrive (sparse logs)
-        setTimeout(() => {
-          if (active && logBufferRef.current.length > 0 && !aiOutput) {
-            setAiOutput(logBufferRef.current.join('\n'))
-          }
-        }, 3000)
       })
     }
 
@@ -243,6 +232,14 @@ export function OutputPanel() {
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedPod?.name, selectedPod?.namespace, outputPanelMode, tailLines, follow, commandKey])
+
+  // ── Manual AI trigger ────────────────────────────────────────────────────
+
+  const handleAnalyzeNow = () => {
+    if (outputForAIRef.current) {
+      setAiOutput(outputForAIRef.current)
+    }
+  }
 
   // ── Render ────────────────────────────────────────────────────────────────
 
@@ -317,6 +314,17 @@ export function OutputPanel() {
               follow
             </button>
           </>
+        )}
+
+        {/* Analyze Now button — describe and logs only, not while AI is already streaming */}
+        {showAI && !isStreaming && (
+          <button
+            onClick={handleAnalyzeNow}
+            className="h-5 px-2 rounded text-xxs font-mono border transition-colors shrink-0 bg-[#7a7adc]/15 text-[#7a7adc] border-[#7a7adc]/40 hover:bg-[#7a7adc]/25"
+            title="Run AI analysis"
+          >
+            ✦ Analyze Now
+          </button>
         )}
 
         {/* AI panel toggle — describe and logs only */}

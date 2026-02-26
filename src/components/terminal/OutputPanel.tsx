@@ -87,6 +87,7 @@ export function OutputPanel() {
   const [follow,      setFollow]      = useState(true)
   const [isStreaming, setIsStreaming] = useState(false)
   const [aiOutput,    setAiOutput]    = useState('')
+  const [analyzeKey,  setAnalyzeKey]  = useState(0)
 
   // ── Terminal init (once on mount) ────────────────────────────────────────
 
@@ -241,6 +242,7 @@ export function OutputPanel() {
     if (!outputForAIRef.current) return
     setAIPanelVisible(true)
     setAiOutput(outputForAIRef.current)
+    setAnalyzeKey((k) => k + 1)
   }
 
   // ── Render ────────────────────────────────────────────────────────────────
@@ -374,6 +376,7 @@ export function OutputPanel() {
           <AIPanel
             output={aiOutput}
             mode={outputPanelMode as 'describe' | 'logs'}
+            analyzeKey={analyzeKey}
           />
         )}
       </div>

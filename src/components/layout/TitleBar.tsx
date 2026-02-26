@@ -10,7 +10,7 @@ function AppLogo() {
       <img
         src={sithLogo}
         alt="ClusterOps"
-        className="h-6 w-6 object-contain"
+        className="h-8 w-8 object-contain"
       />
     </div>
   )
@@ -23,7 +23,7 @@ export function TitleBar() {
     <div
       data-tauri-drag-region
       className="flex items-center h-10 border-b border-border select-none shrink-0"
-      style={{ background: '#1a0000' }}
+      style={{ background: '#3d0000' }}
     >
       {/* Left: branding */}
       <AppLogo />

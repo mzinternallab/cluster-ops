@@ -106,7 +106,7 @@ export function ClusterSelector() {
 
   return (
     <div className="flex items-center gap-2 shrink-0">
-      <span className="text-[10px] font-mono font-semibold tracking-[0.15em] text-text-muted uppercase select-none">
+      <span className="text-[10px] font-mono font-semibold tracking-[0.15em] uppercase select-none" style={{ color: '#ffffff' }}>
         Cluster:
       </span>
 

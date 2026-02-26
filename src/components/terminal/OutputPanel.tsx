@@ -317,7 +317,7 @@ export function OutputPanel() {
         )}
 
         {/* Analyze Now button — describe and logs only, not while AI is already streaming */}
-        {showAI && !isStreaming && (
+        {showAI && (
           <button
             onClick={handleAnalyzeNow}
             className="h-5 px-2 rounded text-xxs font-mono border transition-colors shrink-0 bg-[#7a7adc]/15 text-[#7a7adc] border-[#7a7adc]/40 hover:bg-[#7a7adc]/25"

@@ -20,6 +20,7 @@ interface UIState {
   openOutputPanel: (mode: AIAnalysisMode) => void
   closeOutputPanel: () => void
   toggleAIPanel: () => void
+  setAIPanelVisible: (visible: boolean) => void
   incrementExecSessionKey: () => void
   incrementCommandKey: () => void
   addToCommandHistory: (cmd: string) => void
@@ -39,6 +40,7 @@ export const useUIStore = create<UIState>((set) => ({
   openOutputPanel: (mode) => set({ outputPanelOpen: true, outputPanelMode: mode }),
   closeOutputPanel: () => set({ outputPanelOpen: false, outputPanelMode: null }),
   toggleAIPanel: () => set((s) => ({ aiPanelVisible: !s.aiPanelVisible })),
+  setAIPanelVisible: (visible) => set({ aiPanelVisible: visible }),
   incrementExecSessionKey: () => set((s) => ({ execSessionKey: s.execSessionKey + 1 })),
   incrementCommandKey: () => set((s) => ({ commandKey: s.commandKey + 1 })),
   addToCommandHistory: (cmd) =>

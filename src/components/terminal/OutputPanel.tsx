@@ -71,6 +71,7 @@ export function OutputPanel() {
     closeOutputPanel,
     aiPanelVisible,
     toggleAIPanel,
+    setAIPanelVisible,
     commandKey,
   } = useUIStore()
   const activeContext = useClusterStore((s) => s.activeContext)
@@ -237,10 +238,9 @@ export function OutputPanel() {
   // ── Manual AI trigger ────────────────────────────────────────────────────
 
   const handleAnalyzeNow = () => {
-    if (outputForAIRef.current) {
-      if (!aiPanelVisible) toggleAIPanel()  // open panel if closed
-      setAiOutput(outputForAIRef.current)
-    }
+    if (!outputForAIRef.current) return
+    setAIPanelVisible(true)
+    setAiOutput(outputForAIRef.current)
   }
 
   // ── Render ────────────────────────────────────────────────────────────────

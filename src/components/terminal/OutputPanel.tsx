@@ -240,9 +240,20 @@ export function OutputPanel() {
 
   const handleAnalyzeNow = () => {
     if (!outputForAIRef.current) return
-    setAIPanelVisible(true)
-    setAiOutput(outputForAIRef.current)
-    setAnalyzeKey((k) => k + 1)
+
+    if (!aiPanelVisible) {
+      // Panel is closed — open it first, then trigger analysis
+      // after a brief delay to allow the panel to mount
+      setAIPanelVisible(true)
+      setTimeout(() => {
+        setAiOutput(outputForAIRef.current)
+        setAnalyzeKey((k) => k + 1)
+      }, 50)
+    } else {
+      // Panel already open — trigger analysis immediately
+      setAiOutput(outputForAIRef.current)
+      setAnalyzeKey((k) => k + 1)
+    }
   }
 
   // ── Render ────────────────────────────────────────────────────────────────

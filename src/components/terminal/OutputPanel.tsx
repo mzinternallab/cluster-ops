@@ -140,6 +140,7 @@ export function OutputPanel() {
     setAiOutput('')
     outputForAIRef.current = ''
     logBufferRef.current = []
+    if (aiPanelVisible) toggleAIPanel()  // close AI panel on new pod/mode
 
     // exec mode is handled entirely by ExecPanel — skip the data-load here
     if (outputPanelMode === 'exec') return
@@ -237,6 +238,7 @@ export function OutputPanel() {
 
   const handleAnalyzeNow = () => {
     if (outputForAIRef.current) {
+      if (!aiPanelVisible) toggleAIPanel()  // open panel if closed
       setAiOutput(outputForAIRef.current)
     }
   }

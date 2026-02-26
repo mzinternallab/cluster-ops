@@ -30,7 +30,7 @@ export const useUIStore = create<UIState>((set) => ({
   selectedPod: null,
   outputPanelOpen: false,
   outputPanelMode: null,
-  aiPanelVisible: true,
+  aiPanelVisible: false,
   execSessionKey: 0,
   commandKey: 0,
   commandHistory: [],

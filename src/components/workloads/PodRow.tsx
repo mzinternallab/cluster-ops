@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
 import { invoke } from '@tauri-apps/api/core'
-import { FileText, Search, Trash2 } from 'lucide-react'
+import { Copy, FileText, Search, Trash2 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import type { PodSummary } from '@/types/kubernetes'
 import { StatusBadge } from './StatusBadge'
@@ -36,8 +36,20 @@ export function PodRow({ pod, isSelected, onSelect, onDescribe, onLogs, onExec }
       )}
       onClick={onSelect}
     >
-      <td className="px-3 py-0 text-xs font-mono text-text-primary truncate max-w-[180px]">
-        {pod.name}
+      <td className="px-3 py-0 text-xs font-mono text-text-primary max-w-[180px]">
+        <div className="flex items-center gap-1.5 group">
+          <span className="font-mono text-xs truncate">{pod.name}</span>
+          <button
+            onClick={(e) => {
+              e.stopPropagation()
+              navigator.clipboard.writeText(pod.name)
+            }}
+            className="opacity-0 group-hover:opacity-100 transition-opacity shrink-0 text-text-muted hover:text-text-primary"
+            title="Copy pod name"
+          >
+            <Copy size={11} />
+          </button>
+        </div>
       </td>
       <td className="px-3 py-0 text-xs font-mono text-text-muted truncate max-w-[120px]">
         {pod.namespace}

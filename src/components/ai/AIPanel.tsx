@@ -66,9 +66,10 @@ interface AIPanelProps {
 }
 
 export function AIPanel({ output, mode, analyzeKey = 0 }: AIPanelProps) {
-  const [streaming, setStreaming] = useState(false)
-  const [insights, setInsights]   = useState<AIInsight[]>([])
-  const [error, setError]         = useState<string | null>(null)
+  const [streaming,       setStreaming]       = useState(false)
+  const [insights,        setInsights]        = useState<AIInsight[]>([])
+  const [error,           setError]           = useState<string | null>(null)
+  const [analysisCopied,  setAnalysisCopied]  = useState(false)
 
   const activeRef    = useRef(false)
   const unlistensRef = useRef<(() => void)[]>([])
@@ -162,6 +163,17 @@ export function AIPanel({ output, mode, analyzeKey = 0 }: AIPanelProps) {
 
   useEffect(() => () => stopListeners(), [stopListeners])
 
+  // ── Copy analysis handler ────────────────────────────────────────────────
+
+  const handleCopyAnalysis = async () => {
+    const text = insights.map((insight) =>
+      `[${insight.type.toUpperCase()}] ${insight.title}\n${insight.body}${insight.command ? '\nCommand: ' + insight.command : ''}`
+    ).join('\n\n')
+    await navigator.clipboard.writeText(text)
+    setAnalysisCopied(true)
+    setTimeout(() => setAnalysisCopied(false), 2000)
+  }
+
   // ── Re-analyze handler ───────────────────────────────────────────────────
 
   const handleReanalyze = () => {
@@ -185,16 +197,28 @@ export function AIPanel({ output, mode, analyzeKey = 0 }: AIPanelProps) {
             AI Analysis
           </span>
         </div>
-        {!streaming && output && (
-          <button
-            onClick={handleReanalyze}
-            className="flex items-center gap-1 text-xxs text-text-muted hover:text-text-primary transition-colors"
-            title="Re-analyze"
-          >
-            <RefreshCw size={11} />
-            Re-analyze
-          </button>
-        )}
+        <div className="flex items-center gap-2">
+          {!streaming && insights.length > 0 && (
+            <button
+              onClick={handleCopyAnalysis}
+              className="flex items-center gap-1 text-xxs text-text-muted hover:text-text-primary transition-colors"
+              title="Copy analysis"
+            >
+              {analysisCopied ? <Check size={11} /> : <Copy size={11} />}
+              {analysisCopied ? 'Copied!' : 'Copy'}
+            </button>
+          )}
+          {!streaming && output && (
+            <button
+              onClick={handleReanalyze}
+              className="flex items-center gap-1 text-xxs text-text-muted hover:text-text-primary transition-colors"
+              title="Re-analyze"
+            >
+              <RefreshCw size={11} />
+              Re-analyze
+            </button>
+          )}
+        </div>
       </div>
 
       {/* Body */}

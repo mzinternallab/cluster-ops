@@ -3,7 +3,7 @@ import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import { listen } from '@tauri-apps/api/event'
 import { invoke } from '@tauri-apps/api/core'
-import { Sparkles, X } from 'lucide-react'
+import { Check, Copy, Sparkles, X } from 'lucide-react'
 import '@xterm/xterm/css/xterm.css'
 
 import { cn } from '@/lib/utils'
@@ -88,6 +88,7 @@ export function OutputPanel() {
   const [isStreaming, setIsStreaming] = useState(false)
   const [aiOutput,    setAiOutput]    = useState('')
   const [analyzeKey,  setAnalyzeKey]  = useState(0)
+  const [copied,      setCopied]      = useState(false)
 
   // ── Terminal init (once on mount) ────────────────────────────────────────
 
@@ -238,6 +239,13 @@ export function OutputPanel() {
 
   // ── Manual AI trigger ────────────────────────────────────────────────────
 
+  const handleCopyOutput = async () => {
+    if (!outputForAIRef.current) return
+    await navigator.clipboard.writeText(outputForAIRef.current)
+    setCopied(true)
+    setTimeout(() => setCopied(false), 2000)
+  }
+
   const handleAnalyzeNow = () => {
     if (!outputForAIRef.current) return
 
@@ -329,6 +337,18 @@ export function OutputPanel() {
               follow
             </button>
           </>
+        )}
+
+        {/* Copy output button — describe and logs only */}
+        {showAI && (
+          <button
+            onClick={handleCopyOutput}
+            className="h-5 px-2 rounded text-xxs font-mono border transition-colors shrink-0 flex items-center gap-1 text-text-muted border-border hover:border-text-muted/40 hover:text-text-primary"
+            title="Copy output"
+          >
+            {copied ? <Check size={10} /> : <Copy size={10} />}
+            {copied ? 'Copied!' : 'Copy'}
+          </button>
         )}
 
         {/* Analyze Now button — describe and logs only, not while AI is already streaming */}

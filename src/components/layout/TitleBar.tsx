@@ -1,4 +1,4 @@
-import sithLogo from '@/assets/sith-logo.png'
+import sithLogo from '../../assets/sith-logo.png'
 import { ClusterSelector } from './ClusterSelector'
 import { WindowControls } from './WindowControls'
 

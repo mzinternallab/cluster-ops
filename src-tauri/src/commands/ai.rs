@@ -194,3 +194,95 @@ RBAC configuration data:\n{output}"
     let config = AiConfig::from_env()?;
     AiClient::new(config).chat(prompt, &app).await
 }
+
+// ── analyze_namespace_scan ────────────────────────────────────────────────────
+
+#[tauri::command]
+pub async fn analyze_namespace_scan(
+    app: AppHandle,
+    output: String,
+) -> Result<(), String> {
+    let prompt = format!(
+        "You are a Kubernetes namespace security expert specializing \
+in US Government security frameworks (NSA/CISA Kubernetes \
+Hardening Guide 2022, NIST SP 800-190, CIS Kubernetes Benchmark).\n\
+\n\
+Analyze this Kubernetes namespace configuration and check for:\n\
+- Missing ResourceQuota (no CPU/memory limits for namespace)\n\
+- Missing LimitRange (no default container limits)\n\
+- Missing PodSecurity admission labels (enforce, warn, audit)\n\
+- No pod disruption budgets defined\n\
+- Namespace missing recommended labels and annotations\n\
+- Default service account not restricted\n\
+- Missing network isolation controls\n\
+- Secrets without encryption indicators\n\
+- No audit logging configuration visible\n\
+\n\
+Return ONLY a JSON object:\n\
+{{\n\
+  \"insights\": [\n\
+    {{\n\
+      \"type\": \"critical\" | \"warning\" | \"suggestion\",\n\
+      \"title\": \"Short title\",\n\
+      \"body\": \"Explanation with NSA/CISA or CIS control reference\",\n\
+      \"command\": \"kubectl command to fix or investigate\"\n\
+    }}\n\
+  ]\n\
+}}\n\
+\n\
+Return top findings ordered by severity.\n\
+Only report actual issues found in the data.\n\
+\n\
+Namespace configuration data:\n{output}"
+    );
+
+    let config = AiConfig::from_env()?;
+    AiClient::new(config).chat(prompt, &app).await
+}
+
+// ── analyze_node_scan ─────────────────────────────────────────────────────────
+
+#[tauri::command]
+pub async fn analyze_node_scan(
+    app: AppHandle,
+    output: String,
+) -> Result<(), String> {
+    let prompt = format!(
+        "You are a Kubernetes node security expert specializing in \
+US Government security frameworks (NSA/CISA Kubernetes \
+Hardening Guide 2022, NIST SP 800-190, CIS Kubernetes Benchmark).\n\
+\n\
+Analyze this Kubernetes node data and check for:\n\
+- Nodes running outdated Kubernetes version\n\
+- Nodes under memory or CPU pressure (MemoryPressure, DiskPressure, PIDPressure conditions)\n\
+- Unschedulable nodes\n\
+- Nodes with too many pods approaching capacity\n\
+- Missing node taints for workload isolation\n\
+- Nodes without proper labels for workload segregation\n\
+- Container runtime version outdated\n\
+- Kernel version concerns\n\
+- Missing node security configurations\n\
+- Pods running on control plane nodes that should not be\n\
+- Uneven pod distribution across nodes\n\
+\n\
+Return ONLY a JSON object:\n\
+{{\n\
+  \"insights\": [\n\
+    {{\n\
+      \"type\": \"critical\" | \"warning\" | \"suggestion\",\n\
+      \"title\": \"Short title\",\n\
+      \"body\": \"Explanation with NSA/CISA or CIS control reference\",\n\
+      \"command\": \"kubectl command to fix or investigate\"\n\
+    }}\n\
+  ]\n\
+}}\n\
+\n\
+Return top findings ordered by severity.\n\
+Only report actual issues found in the data.\n\
+\n\
+Node data:\n{output}"
+    );
+
+    let config = AiConfig::from_env()?;
+    AiClient::new(config).chat(prompt, &app).await
+}

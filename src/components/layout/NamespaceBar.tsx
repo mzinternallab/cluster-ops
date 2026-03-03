@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect } from 'react'
-import { ChevronDown, Network, Search, ShieldAlert, X } from 'lucide-react'
+import { ChevronDown, FolderLock, Network, Search, ShieldAlert, X } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { useNamespaceStore } from '@/store/namespaceStore'
 import { useUIStore } from '@/store/uiStore'
@@ -158,6 +158,16 @@ export function NamespaceBar() {
         >
           <ShieldAlert size={11} />
           RBAC Scan
+        </button>
+
+        <button
+          onClick={() => openOutputPanel('namespace-scan')}
+          className="flex items-center gap-1 h-6 px-2 rounded border text-xxs font-mono transition-colors"
+          style={{ background: 'rgb(5 46 22 / 0.4)', borderColor: 'rgb(22 101 52 / 0.4)', color: '#4ade80' }}
+          title="Namespace Security"
+        >
+          <FolderLock size={11} />
+          Namespace Security
         </button>
       </div>
 

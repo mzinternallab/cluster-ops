@@ -132,7 +132,11 @@ export function OutputPanel() {
   useEffect(() => {
     const term = termRef.current
     if (!term || !outputPanelMode) return
-    const isPodRequired = outputPanelMode !== 'command' && outputPanelMode !== 'network-scan' && outputPanelMode !== 'rbac-scan'
+    const isPodRequired = outputPanelMode !== 'command'
+      && outputPanelMode !== 'network-scan'
+      && outputPanelMode !== 'rbac-scan'
+      && outputPanelMode !== 'namespace-scan'
+      && outputPanelMode !== 'node-scan'
     if (isPodRequired && !selectedPod) return
 
     let active = true
@@ -213,6 +217,45 @@ export function OutputPanel() {
             setAiOutput(output)
             setAnalyzeKey((k) => k + 1)
           }, 50)
+        })
+        .catch((err: unknown) => {
+          if (!active) return
+          term.writeln(`${RED}${String(err)}${RESET}`)
+          setIsStreaming(false)
+        })
+
+    } else if (outputPanelMode === 'namespace-scan') {
+      invoke<string>('get_namespace_scan_data', {
+        namespace:   activeNamespace ?? 'default',
+        sourceFile:  activeContext?.sourceFile  ?? '',
+        contextName: activeContext?.contextName ?? '',
+      })
+        .then((output) => {
+          if (!active) return
+          output.split(/\r?\n/).forEach((line) => term.writeln(highlightLine(line)))
+          setIsStreaming(false)
+          outputForAIRef.current = output
+          setAIPanelVisible(true)
+          setTimeout(() => { setAiOutput(output); setAnalyzeKey((k) => k + 1) }, 50)
+        })
+        .catch((err: unknown) => {
+          if (!active) return
+          term.writeln(`${RED}${String(err)}${RESET}`)
+          setIsStreaming(false)
+        })
+
+    } else if (outputPanelMode === 'node-scan') {
+      invoke<string>('get_node_scan_data', {
+        sourceFile:  activeContext?.sourceFile  ?? '',
+        contextName: activeContext?.contextName ?? '',
+      })
+        .then((output) => {
+          if (!active) return
+          output.split(/\r?\n/).forEach((line) => term.writeln(highlightLine(line)))
+          setIsStreaming(false)
+          outputForAIRef.current = output
+          setAIPanelVisible(true)
+          setTimeout(() => { setAiOutput(output); setAnalyzeKey((k) => k + 1) }, 50)
         })
         .catch((err: unknown) => {
           if (!active) return
@@ -320,18 +363,22 @@ export function OutputPanel() {
 
   // ── Render ────────────────────────────────────────────────────────────────
 
-  const isLogs        = outputPanelMode === 'logs'
-  const isExec        = outputPanelMode === 'exec'
-  const isCommand     = outputPanelMode === 'command'
-  const isSecurity    = outputPanelMode === 'security'
-  const isNetworkScan = outputPanelMode === 'network-scan'
-  const isRbacScan    = outputPanelMode === 'rbac-scan'
-  const isScan        = isNetworkScan || isRbacScan
-  const showAI        = !isExec && !isCommand && outputPanelMode !== null
-  const scanNamespace = activeNamespace ?? 'default'
-  const title         = isCommand ? ''
-    : isScan    ? `namespace: ${scanNamespace}`
-    : selectedPod ? `${selectedPod.namespace}/${selectedPod.name}`
+  const isLogs           = outputPanelMode === 'logs'
+  const isExec           = outputPanelMode === 'exec'
+  const isCommand        = outputPanelMode === 'command'
+  const isSecurity       = outputPanelMode === 'security'
+  const isNetworkScan    = outputPanelMode === 'network-scan'
+  const isRbacScan       = outputPanelMode === 'rbac-scan'
+  const isNamespaceScan  = outputPanelMode === 'namespace-scan'
+  const isNodeScan       = outputPanelMode === 'node-scan'
+  const isScan           = isNetworkScan || isRbacScan || isNamespaceScan || isNodeScan
+  const showAI           = !isExec && !isCommand && outputPanelMode !== null
+  const scanNamespace    = activeNamespace ?? 'default'
+  const title            = isCommand ? ''
+    : isNodeScan      ? 'cluster-wide'
+    : isNamespaceScan ? `namespace: ${scanNamespace}`
+    : isScan          ? `namespace: ${scanNamespace}`
+    : selectedPod     ? `${selectedPod.namespace}/${selectedPod.name}`
     : ''
 
   return (
@@ -343,12 +390,14 @@ export function OutputPanel() {
         {/* Mode badge */}
         <span className={cn(
           'text-xxs font-mono px-1.5 py-0.5 rounded uppercase tracking-wider shrink-0',
-          isLogs        ? 'bg-accent/15 text-accent'
-            : isExec        ? 'bg-[#1a1a2e] text-[#7a7adc]'
-            : isCommand     ? 'bg-accent/15 text-accent'
-            : isSecurity    ? 'bg-[#1a1500] text-[#f59e0b]'
-            : isNetworkScan ? 'bg-blue-950/40 text-blue-400'
-            : isRbacScan    ? 'bg-purple-950/40 text-purple-400'
+          isLogs          ? 'bg-accent/15 text-accent'
+            : isExec          ? 'bg-[#1a1a2e] text-[#7a7adc]'
+            : isCommand       ? 'bg-accent/15 text-accent'
+            : isSecurity      ? 'bg-[#1a1500] text-[#f59e0b]'
+            : isNetworkScan   ? 'bg-blue-950/40 text-blue-400'
+            : isRbacScan      ? 'bg-purple-950/40 text-purple-400'
+            : isNamespaceScan ? 'bg-green-950/40 text-green-400'
+            : isNodeScan      ? 'bg-[#1a1500] text-[#f59e0b]'
             : 'bg-ai-purple/15 text-ai-purple',
         )}>
           {outputPanelMode ?? 'output'}
@@ -469,7 +518,7 @@ export function OutputPanel() {
         {showAI && aiPanelVisible && (
           <AIPanel
             output={aiOutput}
-            mode={outputPanelMode as 'describe' | 'logs' | 'security' | 'network-scan' | 'rbac-scan'}
+            mode={outputPanelMode as 'describe' | 'logs' | 'security' | 'network-scan' | 'rbac-scan' | 'namespace-scan' | 'node-scan'}
             analyzeKey={analyzeKey}
           />
         )}

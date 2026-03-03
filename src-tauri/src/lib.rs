@@ -47,6 +47,8 @@ pub fn run() {
             commands::kubectl::get_pod_describe_for_security,
             commands::kubectl::get_network_scan_data,
             commands::kubectl::get_rbac_scan_data,
+            commands::kubectl::get_namespace_scan_data,
+            commands::kubectl::get_node_scan_data,
             commands::kubectl::run_kubectl,
             commands::logs::get_pod_logs,
             commands::proxy::start_kubectl_proxy,
@@ -55,6 +57,8 @@ pub fn run() {
             commands::ai::analyze_security,
             commands::ai::analyze_network_scan,
             commands::ai::analyze_rbac_scan,
+            commands::ai::analyze_namespace_scan,
+            commands::ai::analyze_node_scan,
         ])
         .build(tauri::generate_context!())
         .expect("error while running tauri application")

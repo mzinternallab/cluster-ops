@@ -1,4 +1,4 @@
-import { Layers, FileText, Lock, Globe, Database } from 'lucide-react'
+import { Layers, FileText, Lock, Globe, Database, Server } from 'lucide-react'
 import type { LucideIcon } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { useUIStore } from '@/store/uiStore'
@@ -21,7 +21,7 @@ const NAV_ITEMS: NavItem[] = [
 ]
 
 export function Sidebar() {
-  const { activeView, setActiveView } = useUIStore()
+  const { activeView, setActiveView, openOutputPanel } = useUIStore()
 
   return (
     <aside className="flex flex-col w-[52px] bg-surface border-r border-border shrink-0">
@@ -46,6 +46,20 @@ export function Sidebar() {
           </button>
         )
       })}
+
+      {/* Node Security — opens output panel, not a view */}
+      <button
+        onClick={() => openOutputPanel('node-scan')}
+        title="Node Security"
+        aria-label="Node Security"
+        className={cn(
+          'flex items-center justify-center w-full h-11 border-l-2 transition-colors duration-100',
+          'focus-visible:outline-none shrink-0',
+          'border-transparent text-[#f59e0b]/60 hover:text-[#f59e0b] hover:bg-[#1a1500]',
+        )}
+      >
+        <Server size={16} strokeWidth={1.5} />
+      </button>
     </aside>
   )
 }

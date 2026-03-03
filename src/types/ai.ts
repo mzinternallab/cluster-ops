@@ -13,4 +13,4 @@ export interface AIAnalysisResponse {
   insights: AIInsight[]
 }
 
-export type AIAnalysisMode = 'describe' | 'logs' | 'exec' | 'command' | 'security' | 'network-scan' | 'rbac-scan'
+export type AIAnalysisMode = 'describe' | 'logs' | 'exec' | 'command' | 'security' | 'network-scan' | 'rbac-scan' | 'namespace-scan' | 'node-scan'

@@ -85,33 +85,71 @@ A native desktop Kubernetes management app with AI-powered analysis.
 
 ---
 
-## Anthropic API Key
+## AI Provider Configuration
 
-The AI analysis feature requires an Anthropic API key.
+ClusterOps supports four AI backends for analysis features (pod security scan,
+network scan, RBAC scan, describe analysis, log analysis). Configure via
+environment variables before launching the app.
 
-### Windows (PowerShell)
+### Anthropic (default)
+
+```bash
+AI_PROVIDER=anthropic
+AI_API_KEY=sk-ant-...
+AI_MODEL=claude-sonnet-4-6        # optional — this is the default
+```
+
+### OpenAI
+
+```bash
+AI_PROVIDER=openai
+AI_API_KEY=sk-...
+AI_MODEL=gpt-4o                   # optional — this is the default
+```
+
+### Azure OpenAI
+
+`AI_BASE_URL` must be the full endpoint URL including the deployment path and
+`api-version` query parameter.
+
+```bash
+AI_PROVIDER=azure
+AI_API_KEY=your-azure-key
+AI_MODEL=gpt-4                    # optional — this is the default
+AI_BASE_URL=https://your-resource.openai.azure.com/openai/deployments/gpt-4/chat/completions?api-version=2024-02-01
+```
+
+### Ollama (local, no API key needed)
+
+```bash
+AI_PROVIDER=ollama
+AI_MODEL=llama3                   # optional — this is the default
+AI_BASE_URL=http://localhost:11434  # optional — this is the default
+```
+
+> **Backwards compatibility:** If `AI_API_KEY` is not set, the app falls back
+> to `ANTHROPIC_API_KEY`, so existing configurations continue to work without
+> any changes.
+
+### Setting environment variables
+
+**Windows (PowerShell):**
 
 ```powershell
-[System.Environment]::SetEnvironmentVariable("ANTHROPIC_API_KEY", "sk-ant-your-key-here", "User")
+[System.Environment]::SetEnvironmentVariable("AI_PROVIDER", "anthropic", "User")
+[System.Environment]::SetEnvironmentVariable("AI_API_KEY", "sk-ant-your-key-here", "User")
 ```
 
-Close and reopen PowerShell after running this.
+Close and reopen PowerShell after running this. Alternatively use Start → "Environment Variables" → User variables.
 
-Alternatively via the GUI: Start → search "Environment Variables" → Edit the system environment variables → Environment Variables → User variables → New → `ANTHROPIC_API_KEY`.
-
-### macOS / Linux
-
-Add to `~/.bashrc` or `~/.zshrc`:
+**macOS / Linux** — add to `~/.bashrc` or `~/.zshrc`:
 
 ```bash
-export ANTHROPIC_API_KEY="sk-ant-your-key-here"
+export AI_PROVIDER=anthropic
+export AI_API_KEY="sk-ant-your-key-here"
 ```
 
-Then reload:
-
-```bash
-source ~/.bashrc
-```
+Then reload: `source ~/.bashrc`
 
 ---
 

@@ -1,3 +1,4 @@
+pub mod ai_provider;
 pub mod commands;
 pub mod models;
 

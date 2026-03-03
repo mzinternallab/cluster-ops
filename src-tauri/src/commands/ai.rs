@@ -1,8 +1,7 @@
-// Anthropic Claude API integration — Phase 1 Step 11 + security scan
-// Model: claude-sonnet-4-6
-// Transport: reqwest + SSE streaming
+// AI analysis commands — all providers handled via AiClient in ai_provider.rs
 
-use tauri::{AppHandle, Emitter};
+use tauri::AppHandle;
+use crate::ai_provider::{AiClient, AiConfig};
 
 #[tauri::command]
 pub async fn analyze_with_ai(
@@ -10,9 +9,6 @@ pub async fn analyze_with_ai(
     output: String,
     mode: String, // "describe" or "logs"
 ) -> Result<(), String> {
-    let api_key = std::env::var("ANTHROPIC_API_KEY")
-        .map_err(|_| "ANTHROPIC_API_KEY not set".to_string())?;
-
     let prompt = if mode == "logs" {
         format!(
             "You are a Kubernetes operations expert. Analyze these pod logs and identify:\n\
@@ -54,56 +50,8 @@ pub async fn analyze_with_ai(
         )
     };
 
-    let client = reqwest::Client::new();
-
-    let body = serde_json::json!({
-        "model": "claude-sonnet-4-6",
-        "max_tokens": 4096,
-        "stream": true,
-        "messages": [
-            {"role": "user", "content": prompt}
-        ]
-    });
-
-    let mut response = client
-        .post("https://api.anthropic.com/v1/messages")
-        .header("x-api-key", &api_key)
-        .header("anthropic-version", "2023-06-01")
-        .header("content-type", "application/json")
-        .json(&body)
-        .send()
-        .await
-        .map_err(|e| format!("API request failed: {e}"))?;
-
-    let mut buffer = String::new();
-    let mut done = false;
-
-    while !done {
-        match response.chunk().await.map_err(|e| e.to_string())? {
-            None => break,
-            Some(chunk) => {
-                let text = String::from_utf8_lossy(&chunk);
-                for line in text.lines() {
-                    if let Some(data) = line.strip_prefix("data: ") {
-                        if data.trim() == "[DONE]" {
-                            done = true;
-                            break;
-                        }
-                        if let Ok(json) = serde_json::from_str::<serde_json::Value>(data) {
-                            if let Some(delta) = json["delta"]["text"].as_str() {
-                                buffer.push_str(delta);
-                                app.emit("ai-stream", delta)
-                                    .map_err(|e| e.to_string())?;
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    app.emit("ai-done", &buffer).map_err(|e| e.to_string())?;
-    Ok(())
+    let config = AiConfig::from_env()?;
+    AiClient::new(config).chat(prompt, &app).await
 }
 
 // ── analyze_security ──────────────────────────────────────────────────────────
@@ -155,7 +103,8 @@ Focus only on actual issues found in the describe output.\n\
 kubectl describe pod output:\n{output}"
     );
 
-    stream_ai_response(app, prompt).await
+    let config = AiConfig::from_env()?;
+    AiClient::new(config).chat(prompt, &app).await
 }
 
 // ── analyze_network_scan ──────────────────────────────────────────────────────
@@ -197,7 +146,8 @@ Only report actual issues found in the data.\n\
 Network configuration data:\n{output}"
     );
 
-    stream_ai_response(app, prompt).await
+    let config = AiConfig::from_env()?;
+    AiClient::new(config).chat(prompt, &app).await
 }
 
 // ── analyze_rbac_scan ─────────────────────────────────────────────────────────
@@ -241,63 +191,6 @@ Only report actual issues found in the data.\n\
 RBAC configuration data:\n{output}"
     );
 
-    stream_ai_response(app, prompt).await
-}
-
-// ── shared SSE streaming helper ───────────────────────────────────────────────
-
-async fn stream_ai_response(app: AppHandle, prompt: String) -> Result<(), String> {
-    let api_key = std::env::var("ANTHROPIC_API_KEY")
-        .map_err(|_| "ANTHROPIC_API_KEY not set".to_string())?;
-
-    let client = reqwest::Client::new();
-
-    let body = serde_json::json!({
-        "model": "claude-sonnet-4-6",
-        "max_tokens": 4096,
-        "stream": true,
-        "messages": [
-            {"role": "user", "content": prompt}
-        ]
-    });
-
-    let mut response = client
-        .post("https://api.anthropic.com/v1/messages")
-        .header("x-api-key", &api_key)
-        .header("anthropic-version", "2023-06-01")
-        .header("content-type", "application/json")
-        .json(&body)
-        .send()
-        .await
-        .map_err(|e| format!("API request failed: {e}"))?;
-
-    let mut buffer = String::new();
-    let mut done = false;
-
-    while !done {
-        match response.chunk().await.map_err(|e| e.to_string())? {
-            None => break,
-            Some(chunk) => {
-                let text = String::from_utf8_lossy(&chunk);
-                for line in text.lines() {
-                    if let Some(data) = line.strip_prefix("data: ") {
-                        if data.trim() == "[DONE]" {
-                            done = true;
-                            break;
-                        }
-                        if let Ok(json) = serde_json::from_str::<serde_json::Value>(data) {
-                            if let Some(delta) = json["delta"]["text"].as_str() {
-                                buffer.push_str(delta);
-                                app.emit("ai-stream", delta)
-                                    .map_err(|e| e.to_string())?;
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    app.emit("ai-done", &buffer).map_err(|e| e.to_string())?;
-    Ok(())
+    let config = AiConfig::from_env()?;
+    AiClient::new(config).chat(prompt, &app).await
 }

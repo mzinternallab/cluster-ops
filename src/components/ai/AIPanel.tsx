@@ -61,7 +61,7 @@ function InsightCard({ insight }: { insight: AIInsight }) {
 
 interface AIPanelProps {
   output: string
-  mode: 'describe' | 'logs' | 'security'
+  mode: 'describe' | 'logs' | 'security' | 'network-scan' | 'rbac-scan'
   analyzeKey?: number
 }
 
@@ -132,6 +132,10 @@ export function AIPanel({ output, mode, analyzeKey = 0 }: AIPanelProps) {
 
       if (m === 'security') {
         await invoke('analyze_security', { output: out })
+      } else if (m === 'network-scan') {
+        await invoke('analyze_network_scan', { output: out })
+      } else if (m === 'rbac-scan') {
+        await invoke('analyze_rbac_scan', { output: out })
       } else {
         await invoke('analyze_with_ai', { output: out, mode: m })
       }

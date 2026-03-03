@@ -113,9 +113,6 @@ pub async fn analyze_security(
     app: AppHandle,
     output: String,
 ) -> Result<(), String> {
-    let api_key = std::env::var("ANTHROPIC_API_KEY")
-        .map_err(|_| "ANTHROPIC_API_KEY not set".to_string())?;
-
     let prompt = format!(
         "You are a Kubernetes security expert specializing in \
 US Government security frameworks. Analyze this kubectl \
@@ -157,6 +154,101 @@ Focus only on actual issues found in the describe output.\n\
 \n\
 kubectl describe pod output:\n{output}"
     );
+
+    stream_ai_response(app, prompt).await
+}
+
+// ── analyze_network_scan ──────────────────────────────────────────────────────
+
+#[tauri::command]
+pub async fn analyze_network_scan(
+    app: AppHandle,
+    output: String,
+) -> Result<(), String> {
+    let prompt = format!(
+        "You are a Kubernetes network security expert specializing in \
+US Government security frameworks (NSA/CISA Kubernetes Hardening \
+Guide 2022, NIST SP 800-190).\n\
+\n\
+Analyze this Kubernetes network configuration data and check for:\n\
+- Missing NetworkPolicy for the namespace (no default deny)\n\
+- Overly permissive ingress rules (allowing all sources)\n\
+- Overly permissive egress rules (allowing all destinations)\n\
+- Unrestricted pod-to-pod communication\n\
+- Services exposed as LoadBalancer or NodePort unnecessarily\n\
+- Ingress without TLS configured\n\
+- Missing network segmentation between namespaces\n\
+\n\
+Return ONLY a JSON object:\n\
+{{\n\
+  \"insights\": [\n\
+    {{\n\
+      \"type\": \"critical\" | \"warning\" | \"suggestion\",\n\
+      \"title\": \"Short title\",\n\
+      \"body\": \"Explanation with NSA/CISA control reference\",\n\
+      \"command\": \"kubectl command to fix or investigate\"\n\
+    }}\n\
+  ]\n\
+}}\n\
+\n\
+Return top findings ordered by severity.\n\
+Only report actual issues found in the data.\n\
+\n\
+Network configuration data:\n{output}"
+    );
+
+    stream_ai_response(app, prompt).await
+}
+
+// ── analyze_rbac_scan ─────────────────────────────────────────────────────────
+
+#[tauri::command]
+pub async fn analyze_rbac_scan(
+    app: AppHandle,
+    output: String,
+) -> Result<(), String> {
+    let prompt = format!(
+        "You are a Kubernetes RBAC security expert specializing in \
+US Government security frameworks (NSA/CISA Kubernetes Hardening \
+Guide 2022, NIST SP 800-190, NIST SP 800-53).\n\
+\n\
+Analyze this Kubernetes RBAC configuration and check for:\n\
+- ServiceAccounts with cluster-admin or admin role bindings\n\
+- Wildcard permissions (* verbs or * resources) in roles\n\
+- Default service account with elevated permissions\n\
+- Overly broad role bindings giving namespace-wide access\n\
+- Excessive secret access (get/list/watch secrets)\n\
+- Ability to exec into pods (pods/exec permission)\n\
+- Ability to escalate privileges (escalate, bind, impersonate verbs)\n\
+- Roles with delete permissions on critical resources\n\
+- ClusterRoleBindings that should be namespace-scoped RoleBindings\n\
+\n\
+Return ONLY a JSON object:\n\
+{{\n\
+  \"insights\": [\n\
+    {{\n\
+      \"type\": \"critical\" | \"warning\" | \"suggestion\",\n\
+      \"title\": \"Short title\",\n\
+      \"body\": \"Explanation with NIST/NSA control reference\",\n\
+      \"command\": \"kubectl command to investigate or remediate\"\n\
+    }}\n\
+  ]\n\
+}}\n\
+\n\
+Return top findings ordered by severity.\n\
+Only report actual issues found in the data.\n\
+\n\
+RBAC configuration data:\n{output}"
+    );
+
+    stream_ai_response(app, prompt).await
+}
+
+// ── shared SSE streaming helper ───────────────────────────────────────────────
+
+async fn stream_ai_response(app: AppHandle, prompt: String) -> Result<(), String> {
+    let api_key = std::env::var("ANTHROPIC_API_KEY")
+        .map_err(|_| "ANTHROPIC_API_KEY not set".to_string())?;
 
     let client = reqwest::Client::new();
 

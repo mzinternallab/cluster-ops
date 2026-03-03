@@ -9,6 +9,7 @@ import '@xterm/xterm/css/xterm.css'
 import { cn } from '@/lib/utils'
 import { useUIStore } from '@/store/uiStore'
 import { useClusterStore } from '@/store/clusterStore'
+import { useNamespaceStore } from '@/store/namespaceStore'
 import { ExecPanel } from './ExecPanel'
 import { AIPanel } from '@/components/ai/AIPanel'
 
@@ -74,7 +75,8 @@ export function OutputPanel() {
     setAIPanelVisible,
     commandKey,
   } = useUIStore()
-  const activeContext = useClusterStore((s) => s.activeContext)
+  const activeContext   = useClusterStore((s) => s.activeContext)
+  const activeNamespace = useNamespaceStore((s) => s.activeNamespace)
 
   const containerRef = useRef<HTMLDivElement>(null)
   const termRef      = useRef<Terminal | null>(null)
@@ -130,7 +132,8 @@ export function OutputPanel() {
   useEffect(() => {
     const term = termRef.current
     if (!term || !outputPanelMode) return
-    if (outputPanelMode !== 'command' && !selectedPod) return
+    const isPodRequired = outputPanelMode !== 'command' && outputPanelMode !== 'network-scan' && outputPanelMode !== 'rbac-scan'
+    if (isPodRequired && !selectedPod) return
 
     let active = true
     const stopListeners = () => {
@@ -217,6 +220,32 @@ export function OutputPanel() {
           setIsStreaming(false)
         })
 
+    } else if (outputPanelMode === 'network-scan' || outputPanelMode === 'rbac-scan') {
+      const scanNamespace = activeNamespace ?? 'default'
+      const command = outputPanelMode === 'network-scan' ? 'get_network_scan_data' : 'get_rbac_scan_data'
+      invoke<string>(command, {
+        namespace:   scanNamespace,
+        sourceFile:  activeContext?.sourceFile  ?? '',
+        contextName: activeContext?.contextName ?? '',
+      })
+        .then((output) => {
+          if (!active) return
+          output.split(/\r?\n/).forEach((line) => term.writeln(highlightLine(line)))
+          setIsStreaming(false)
+          outputForAIRef.current = output
+          // Auto-open AI panel and trigger scan analysis
+          setAIPanelVisible(true)
+          setTimeout(() => {
+            setAiOutput(output)
+            setAnalyzeKey((k) => k + 1)
+          }, 50)
+        })
+        .catch((err: unknown) => {
+          if (!active) return
+          term.writeln(`${RED}${String(err)}${RESET}`)
+          setIsStreaming(false)
+        })
+
     } else if (outputPanelMode === 'logs') {
       // Register listeners BEFORE invoking so no lines are missed
       Promise.all([
@@ -291,13 +320,18 @@ export function OutputPanel() {
 
   // ── Render ────────────────────────────────────────────────────────────────
 
-  const isLogs     = outputPanelMode === 'logs'
-  const isExec     = outputPanelMode === 'exec'
-  const isCommand  = outputPanelMode === 'command'
-  const isSecurity = outputPanelMode === 'security'
-  const showAI     = !isExec && !isCommand && outputPanelMode !== null
-  const title      = isCommand ? '' : selectedPod
-    ? `${selectedPod.namespace}/${selectedPod.name}`
+  const isLogs        = outputPanelMode === 'logs'
+  const isExec        = outputPanelMode === 'exec'
+  const isCommand     = outputPanelMode === 'command'
+  const isSecurity    = outputPanelMode === 'security'
+  const isNetworkScan = outputPanelMode === 'network-scan'
+  const isRbacScan    = outputPanelMode === 'rbac-scan'
+  const isScan        = isNetworkScan || isRbacScan
+  const showAI        = !isExec && !isCommand && outputPanelMode !== null
+  const scanNamespace = activeNamespace ?? 'default'
+  const title         = isCommand ? ''
+    : isScan    ? `namespace: ${scanNamespace}`
+    : selectedPod ? `${selectedPod.namespace}/${selectedPod.name}`
     : ''
 
   return (
@@ -309,10 +343,12 @@ export function OutputPanel() {
         {/* Mode badge */}
         <span className={cn(
           'text-xxs font-mono px-1.5 py-0.5 rounded uppercase tracking-wider shrink-0',
-          isLogs     ? 'bg-accent/15 text-accent'
-            : isExec     ? 'bg-[#1a1a2e] text-[#7a7adc]'
-            : isCommand  ? 'bg-accent/15 text-accent'
-            : isSecurity ? 'bg-[#1a1500] text-[#f59e0b]'
+          isLogs        ? 'bg-accent/15 text-accent'
+            : isExec        ? 'bg-[#1a1a2e] text-[#7a7adc]'
+            : isCommand     ? 'bg-accent/15 text-accent'
+            : isSecurity    ? 'bg-[#1a1500] text-[#f59e0b]'
+            : isNetworkScan ? 'bg-blue-950/40 text-blue-400'
+            : isRbacScan    ? 'bg-purple-950/40 text-purple-400'
             : 'bg-ai-purple/15 text-ai-purple',
         )}>
           {outputPanelMode ?? 'output'}
@@ -366,7 +402,7 @@ export function OutputPanel() {
           </>
         )}
 
-        {/* Copy output button — describe and logs only, not security */}
+        {/* Copy output button — describe, logs, and scan modes; not security */}
         {showAI && !isSecurity && (
           <button
             onClick={handleCopyOutput}
@@ -378,8 +414,8 @@ export function OutputPanel() {
           </button>
         )}
 
-        {/* Analyze Now button — describe and logs only, not security (security auto-analyzes) */}
-        {showAI && !isSecurity && (
+        {/* Analyze Now button — describe and logs only; security and scan modes auto-analyze */}
+        {showAI && !isSecurity && !isScan && (
           <button
             onClick={handleAnalyzeNow}
             className="h-5 px-2 rounded text-xxs font-mono border transition-colors shrink-0 bg-[#7a7adc]/15 text-[#7a7adc] border-[#7a7adc]/40 hover:bg-[#7a7adc]/25"
@@ -389,8 +425,8 @@ export function OutputPanel() {
           </button>
         )}
 
-        {/* AI panel toggle — describe and logs only; security auto-opens the panel */}
-        {showAI && !isSecurity && (
+        {/* AI panel toggle — describe and logs only; security and scan modes auto-open the panel */}
+        {showAI && !isSecurity && !isScan && (
           <button
             onClick={toggleAIPanel}
             className={cn(
@@ -433,7 +469,7 @@ export function OutputPanel() {
         {showAI && aiPanelVisible && (
           <AIPanel
             output={aiOutput}
-            mode={outputPanelMode as 'describe' | 'logs' | 'security'}
+            mode={outputPanelMode as 'describe' | 'logs' | 'security' | 'network-scan' | 'rbac-scan'}
             analyzeKey={analyzeKey}
           />
         )}

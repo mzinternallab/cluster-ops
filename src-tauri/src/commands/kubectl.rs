@@ -49,6 +49,88 @@ pub async fn get_pod_describe_for_security(
     describe_pod(name, namespace, source_file, context_name).await
 }
 
+// ── get_network_scan_data ─────────────────────────────────────────────────────
+
+#[tauri::command]
+pub async fn get_network_scan_data(
+    namespace: String,
+    source_file: String,
+    context_name: String,
+) -> Result<String, String> {
+    let kubectl = which::which("kubectl")
+        .map(|p| p.to_string_lossy().to_string())
+        .unwrap_or_else(|_| "kubectl".to_string());
+
+    let kubeconfig = format!("--kubeconfig={source_file}");
+    let context    = format!("--context={context_name}");
+
+    let commands: Vec<Vec<&str>> = vec![
+        vec!["get", "networkpolicy", "-n", &namespace, "-o", "yaml"],
+        vec!["get", "pods",          "-n", &namespace, "-o", "wide"],
+        vec!["get", "services",      "-n", &namespace, "-o", "yaml"],
+        vec!["get", "ingress",       "-n", &namespace, "-o", "yaml"],
+    ];
+
+    let mut combined = String::new();
+    for args in &commands {
+        let mut full_args = args.clone();
+        full_args.push(&kubeconfig);
+        full_args.push(&context);
+
+        if let Ok(output) = tokio::process::Command::new(&kubectl)
+            .args(&full_args)
+            .output()
+            .await
+        {
+            combined.push_str(&format!("=== {} ===\n", args.join(" ")));
+            combined.push_str(&String::from_utf8_lossy(&output.stdout));
+            combined.push('\n');
+        }
+    }
+    Ok(combined)
+}
+
+// ── get_rbac_scan_data ────────────────────────────────────────────────────────
+
+#[tauri::command]
+pub async fn get_rbac_scan_data(
+    namespace: String,
+    source_file: String,
+    context_name: String,
+) -> Result<String, String> {
+    let kubectl = which::which("kubectl")
+        .map(|p| p.to_string_lossy().to_string())
+        .unwrap_or_else(|_| "kubectl".to_string());
+
+    let kubeconfig = format!("--kubeconfig={source_file}");
+    let context    = format!("--context={context_name}");
+
+    let commands: Vec<Vec<&str>> = vec![
+        vec!["get", "rolebindings",        "-n", &namespace, "-o", "yaml"],
+        vec!["get", "roles",               "-n", &namespace, "-o", "yaml"],
+        vec!["get", "serviceaccounts",     "-n", &namespace, "-o", "yaml"],
+        vec!["get", "clusterrolebindings",               "-o", "yaml"],
+    ];
+
+    let mut combined = String::new();
+    for args in &commands {
+        let mut full_args = args.clone();
+        full_args.push(&kubeconfig);
+        full_args.push(&context);
+
+        if let Ok(output) = tokio::process::Command::new(&kubectl)
+            .args(&full_args)
+            .output()
+            .await
+        {
+            combined.push_str(&format!("=== {} ===\n", args.join(" ")));
+            combined.push_str(&String::from_utf8_lossy(&output.stdout));
+            combined.push('\n');
+        }
+    }
+    Ok(combined)
+}
+
 // ── run_kubectl ───────────────────────────────────────────────────────────────
 
 /// Runs an arbitrary kubectl command, appending --kubeconfig and --context.

@@ -61,7 +61,7 @@ function InsightCard({ insight }: { insight: AIInsight }) {
 
 interface AIPanelProps {
   output: string
-  mode: 'describe' | 'logs'
+  mode: 'describe' | 'logs' | 'security'
   analyzeKey?: number
 }
 
@@ -130,7 +130,11 @@ export function AIPanel({ output, mode, analyzeKey = 0 }: AIPanelProps) {
       }
       unlistensRef.current = uls
 
-      await invoke('analyze_with_ai', { output: out, mode: m })
+      if (m === 'security') {
+        await invoke('analyze_security', { output: out })
+      } else {
+        await invoke('analyze_with_ai', { output: out, mode: m })
+      }
     } catch (err: unknown) {
       if (!activeRef.current) return
       stopListeners()

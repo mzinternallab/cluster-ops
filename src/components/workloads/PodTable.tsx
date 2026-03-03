@@ -155,6 +155,7 @@ export function PodTable() {
                   onDescribe={() => { setSelectedPod(pod); openOutputPanel('describe') }}
                   onLogs={() => { setSelectedPod(pod); openOutputPanel('logs') }}
                   onExec={() => { incrementExecSessionKey(); setSelectedPod(pod); openOutputPanel('exec') }}
+                  onSecurity={() => { setSelectedPod(pod); openOutputPanel('security') }}
                 />
               ))
             )}

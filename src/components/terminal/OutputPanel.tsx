@@ -192,6 +192,31 @@ export function OutputPanel() {
           setIsStreaming(false)
         })
 
+    } else if (outputPanelMode === 'security') {
+      invoke<string>('get_pod_describe_for_security', {
+        name:        selectedPod.name,
+        namespace:   selectedPod.namespace,
+        sourceFile:  activeContext?.sourceFile  ?? '',
+        contextName: activeContext?.contextName ?? '',
+      })
+        .then((output) => {
+          if (!active) return
+          output.split(/\r?\n/).forEach((line) => term.writeln(highlightLine(line)))
+          setIsStreaming(false)
+          outputForAIRef.current = output
+          // Auto-open AI panel and trigger security analysis
+          setAIPanelVisible(true)
+          setTimeout(() => {
+            setAiOutput(output)
+            setAnalyzeKey((k) => k + 1)
+          }, 50)
+        })
+        .catch((err: unknown) => {
+          if (!active) return
+          term.writeln(`${RED}${String(err)}${RESET}`)
+          setIsStreaming(false)
+        })
+
     } else if (outputPanelMode === 'logs') {
       // Register listeners BEFORE invoking so no lines are missed
       Promise.all([
@@ -266,11 +291,12 @@ export function OutputPanel() {
 
   // ── Render ────────────────────────────────────────────────────────────────
 
-  const isLogs    = outputPanelMode === 'logs'
-  const isExec    = outputPanelMode === 'exec'
-  const isCommand = outputPanelMode === 'command'
-  const showAI    = !isExec && !isCommand && outputPanelMode !== null
-  const title     = isCommand ? '' : selectedPod
+  const isLogs     = outputPanelMode === 'logs'
+  const isExec     = outputPanelMode === 'exec'
+  const isCommand  = outputPanelMode === 'command'
+  const isSecurity = outputPanelMode === 'security'
+  const showAI     = !isExec && !isCommand && outputPanelMode !== null
+  const title      = isCommand ? '' : selectedPod
     ? `${selectedPod.namespace}/${selectedPod.name}`
     : ''
 
@@ -283,9 +309,10 @@ export function OutputPanel() {
         {/* Mode badge */}
         <span className={cn(
           'text-xxs font-mono px-1.5 py-0.5 rounded uppercase tracking-wider shrink-0',
-          isLogs    ? 'bg-accent/15 text-accent'
-            : isExec    ? 'bg-[#1a1a2e] text-[#7a7adc]'
-            : isCommand ? 'bg-accent/15 text-accent'
+          isLogs     ? 'bg-accent/15 text-accent'
+            : isExec     ? 'bg-[#1a1a2e] text-[#7a7adc]'
+            : isCommand  ? 'bg-accent/15 text-accent'
+            : isSecurity ? 'bg-[#1a1500] text-[#f59e0b]'
             : 'bg-ai-purple/15 text-ai-purple',
         )}>
           {outputPanelMode ?? 'output'}
@@ -339,8 +366,8 @@ export function OutputPanel() {
           </>
         )}
 
-        {/* Copy output button — describe and logs only */}
-        {showAI && (
+        {/* Copy output button — describe and logs only, not security */}
+        {showAI && !isSecurity && (
           <button
             onClick={handleCopyOutput}
             className="h-5 px-2 rounded text-xxs font-mono border transition-colors shrink-0 flex items-center gap-1 text-text-muted border-border hover:border-text-muted/40 hover:text-text-primary"
@@ -351,8 +378,8 @@ export function OutputPanel() {
           </button>
         )}
 
-        {/* Analyze Now button — describe and logs only, not while AI is already streaming */}
-        {showAI && (
+        {/* Analyze Now button — describe and logs only, not security (security auto-analyzes) */}
+        {showAI && !isSecurity && (
           <button
             onClick={handleAnalyzeNow}
             className="h-5 px-2 rounded text-xxs font-mono border transition-colors shrink-0 bg-[#7a7adc]/15 text-[#7a7adc] border-[#7a7adc]/40 hover:bg-[#7a7adc]/25"
@@ -362,8 +389,8 @@ export function OutputPanel() {
           </button>
         )}
 
-        {/* AI panel toggle — describe and logs only */}
-        {showAI && (
+        {/* AI panel toggle — describe and logs only; security auto-opens the panel */}
+        {showAI && !isSecurity && (
           <button
             onClick={toggleAIPanel}
             className={cn(
@@ -406,7 +433,7 @@ export function OutputPanel() {
         {showAI && aiPanelVisible && (
           <AIPanel
             output={aiOutput}
-            mode={outputPanelMode as 'describe' | 'logs'}
+            mode={outputPanelMode as 'describe' | 'logs' | 'security'}
             analyzeKey={analyzeKey}
           />
         )}

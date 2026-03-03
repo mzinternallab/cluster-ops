@@ -35,6 +35,20 @@ pub async fn describe_pod(
     }
 }
 
+// ── get_pod_describe_for_security ────────────────────────────────────────────
+
+/// Alias for describe_pod used by the security scan feature.
+/// Returns the full kubectl describe pod output as a String.
+#[tauri::command]
+pub async fn get_pod_describe_for_security(
+    name: String,
+    namespace: String,
+    source_file: String,
+    context_name: String,
+) -> Result<String, String> {
+    describe_pod(name, namespace, source_file, context_name).await
+}
+
 // ── run_kubectl ───────────────────────────────────────────────────────────────
 
 /// Runs an arbitrary kubectl command, appending --kubeconfig and --context.

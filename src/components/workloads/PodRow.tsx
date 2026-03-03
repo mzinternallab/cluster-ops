@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
 import { invoke } from '@tauri-apps/api/core'
-import { Copy, FileText, Search, Trash2 } from 'lucide-react'
+import { Copy, FileText, Search, Shield, Trash2 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import type { PodSummary } from '@/types/kubernetes'
 import { StatusBadge } from './StatusBadge'
@@ -13,9 +13,10 @@ interface PodRowProps {
   onDescribe: () => void
   onLogs: () => void
   onExec: () => void
+  onSecurity: () => void
 }
 
-export function PodRow({ pod, isSelected, onSelect, onDescribe, onLogs, onExec }: PodRowProps) {
+export function PodRow({ pod, isSelected, onSelect, onDescribe, onLogs, onExec, onSecurity }: PodRowProps) {
   const queryClient = useQueryClient()
   const [confirmDelete, setConfirmDelete] = useState(false)
 
@@ -76,6 +77,16 @@ export function PodRow({ pod, isSelected, onSelect, onDescribe, onLogs, onExec }
       {/* COMMANDS cell */}
       <td className="px-2 py-0">
         <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity duration-75">
+
+          {/* Security Scan button */}
+          <button
+            title="Security Scan"
+            onClick={(e) => { e.stopPropagation(); onSecurity() }}
+            className="flex items-center h-5 px-1.5 rounded border transition-colors"
+            style={{ background: '#1a1500', borderColor: '#3d3000', color: '#f59e0b' }}
+          >
+            <Shield size={10} />
+          </button>
 
           {/* Exec button */}
           <button

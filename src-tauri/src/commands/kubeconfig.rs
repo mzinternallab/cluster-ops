@@ -23,84 +23,84 @@ fn primary_kubeconfig_path() -> Option<PathBuf> {
         .or_else(|| dirs::home_dir().map(|h| h.join(".kube").join("config")))
 }
 
-/// Derives the display name for a cluster from its kubeconfig filename.
-///
-/// Rules:
-///   "config.eagle-i-orc"  →  "eagle-i-orc"
-///   "config.rovi"         →  "rovi"
-///   "config"              →  falls back to `fallback` (the context name)
-fn display_name_from_filename(filename: &str, fallback: &str) -> String {
-    if let Some(suffix) = filename.strip_prefix("config.") {
-        if !suffix.is_empty() {
-            return suffix.to_string();
-        }
-    }
-    fallback.to_string()
+/// Derives a display name from a `config.*` filename suffix.
+/// "config.eagle-i-orc" → "eagle-i-orc", "config" → None
+fn suffix_from_filename(filename: &str) -> Option<&str> {
+    filename
+        .strip_prefix("config.")
+        .filter(|s| !s.is_empty())
 }
 
 // ── commands ──────────────────────────────────────────────────────────────────
 
-/// Lists all contexts found by scanning every file in `~/.kube` whose name
-/// starts with `"config"`.
+/// Lists all contexts found by scanning `~/.kube`:
 ///
-/// Each returned `KubeContext` has:
-///   - `display_name`  — from the filename (e.g. "eagle-i-orc")
-///   - `context_name`  — actual context name in the file (e.g. "local")
-///   - `source_file`   — absolute path to the owning file
+/// 1. `~/.kube/config` (merged config) — contexts are used as-is; display
+///    name is the context name unless it is "local" or "default", in which
+///    case it falls back to the filename suffix (always "config" → no suffix,
+///    so it stays as the context name).
 ///
-/// `is_active` is true for the single (source_file, context_name) pair that
-/// corresponds to the kubeconfig's declared `current-context`.
+/// 2. `~/.kube/config.*` files — if context name is "local", display name is
+///    derived from the filename suffix; otherwise the context name is used.
+///
+/// Contexts are deduplicated by context name across all sources — the first
+/// occurrence wins (merged config is processed first).
 #[tauri::command]
 pub async fn get_kubeconfig_contexts() -> Result<Vec<KubeContext>, String> {
     let kube_dir = dirs::home_dir()
         .map(|h| h.join(".kube"))
         .ok_or_else(|| "Cannot determine home directory".to_string())?;
 
-    // ── collect all files whose name starts with "config" ────────────────────
-    let mut config_files: Vec<PathBuf> = Vec::new();
-    match std::fs::read_dir(&kube_dir) {
-        Ok(entries) => {
-            for entry in entries.flatten() {
-                let path = entry.path();
-                if path.is_dir() {
-                    continue;
-                }
-                let name = path
-                    .file_name()
-                    .and_then(|n| n.to_str())
-                    .unwrap_or("");
-                if name.starts_with("config") {
-                    config_files.push(path);
-                }
-            }
-        }
-        Err(_) => {
-            return Ok(vec![]);
+    // ── (a) merged config ─────────────────────────────────────────────────────
+    // Parsed first so its contexts win deduplication.
+    let merged_path = kube_dir.join("config");
+    let mut parsed: Vec<(PathBuf, bool)> = Vec::new(); // (path, is_merged)
+
+    if merged_path.is_file() {
+        if Kubeconfig::read_from(&merged_path).is_ok() {
+            parsed.push((merged_path.clone(), true));
         }
     }
-    config_files.sort();
 
-    // ── parse each file, keeping (path, Kubeconfig) pairs ────────────────────
-    let mut parsed: Vec<(PathBuf, Kubeconfig)> = Vec::new();
-    for path in &config_files {
-        let filename = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
-        match Kubeconfig::read_from(path) {
-            Ok(cfg) => {
-                parsed.push((path.clone(), cfg));
+    // ── (b) individual config.* files ────────────────────────────────────────
+    let mut individual_files: Vec<PathBuf> = Vec::new();
+    if let Ok(entries) = std::fs::read_dir(&kube_dir) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                continue;
             }
-            Err(_) => {}
+            let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+            if name.starts_with("config.") {
+                individual_files.push(path);
+            }
         }
+    }
+    individual_files.sort();
+    for path in individual_files {
+        parsed.push((path, false));
     }
 
     if parsed.is_empty() {
         return Ok(vec![]);
     }
 
+    // ── parse each file, keeping (path, Kubeconfig, is_merged) triples ───────
+    let mut all: Vec<(PathBuf, Kubeconfig, bool)> = Vec::new();
+    for (path, is_merged) in &parsed {
+        if let Ok(cfg) = Kubeconfig::read_from(path) {
+            all.push((path.clone(), cfg, *is_merged));
+        }
+    }
+
+    if all.is_empty() {
+        return Ok(vec![]);
+    }
+
     // ── determine which (source_file, context_name) pair is active ────────────
-    // The first file that declares current_context is authoritative.
-    let (active_source, active_ctx_name) = parsed
+    let (active_source, active_ctx_name) = all
         .iter()
-        .find_map(|(path, cfg)| {
+        .find_map(|(path, cfg, _)| {
             cfg.current_context
                 .as_ref()
                 .map(|c| (path.to_string_lossy().into_owned(), c.clone()))
@@ -108,22 +108,20 @@ pub async fn get_kubeconfig_contexts() -> Result<Vec<KubeContext>, String> {
         .unwrap_or_default();
 
     // ── build cluster → server URL map across all files ───────────────────────
-    let cluster_servers: HashMap<String, String> = parsed
+    let cluster_servers: HashMap<String, String> = all
         .iter()
-        .flat_map(|(_, cfg)| cfg.clusters.iter())
+        .flat_map(|(_, cfg, _)| cfg.clusters.iter())
         .filter_map(|nc| {
             let server = nc.cluster.as_ref()?.server.clone()?;
             Some((nc.name.clone(), server))
         })
         .collect();
 
-    // ── emit one KubeContext per (file, context) pair ─────────────────────────
-    // No deduplication by context_name — multiple files can all have context
-    // "local" and each represents a distinct cluster. display_name (from the
-    // filename) is what uniquely identifies each cluster in the UI.
+    // ── emit one KubeContext per context, deduplicating by context name ───────
+    let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
     let mut contexts: Vec<KubeContext> = Vec::new();
 
-    for (path, cfg) in &parsed {
+    for (path, cfg, is_merged) in &all {
         let source = path.to_string_lossy().into_owned();
         let filename = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
 
@@ -132,7 +130,28 @@ pub async fn get_kubeconfig_contexts() -> Result<Vec<KubeContext>, String> {
                 continue;
             };
             let context_name = named.name.clone();
-            let display_name = display_name_from_filename(filename, &context_name);
+
+            // First occurrence of a context name wins.
+            if !seen.insert(context_name.clone()) {
+                continue;
+            }
+
+            let display_name = if *is_merged {
+                // Merged config: context names are already descriptive
+                // (e.g. "eagle-i-orc", "rovi"). Use directly.
+                context_name.clone()
+            } else {
+                // Individual config.* file: if context name is "local",
+                // derive display name from filename suffix.
+                if context_name == "local" {
+                    suffix_from_filename(filename)
+                        .unwrap_or(&context_name)
+                        .to_string()
+                } else {
+                    context_name.clone()
+                }
+            };
+
             let server_url = cluster_servers.get(&ctx.cluster).cloned();
             let is_active = source == active_source && context_name == active_ctx_name;
 

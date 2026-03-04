@@ -15,7 +15,7 @@ type SortDir = 'asc' | 'desc'
 // ── Column definitions ────────────────────────────────────────────────────────
 
 const COLUMNS: { key: SortKey | null; label: string; className: string; padClass?: string }[] = [
-  { key: 'name',      label: 'NAME',     className: 'min-w-[160px]'                  },
+  { key: 'name',      label: 'NAME',     className: 'min-w-[280px]'                  },
   { key: 'namespace', label: 'NAMESPACE',className: 'min-w-[110px]'                  },
   { key: 'status',    label: 'STATUS',   className: 'min-w-[130px]', padClass: 'px-2'},
   { key: 'ready',     label: 'READY',    className: 'w-[70px]'                       },

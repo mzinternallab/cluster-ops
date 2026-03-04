@@ -199,3 +199,18 @@ Output locations:
 2. Save to `~/.kube/config.<clustername>` (e.g. `~/.kube/config.production`)
 3. Restart ClusterOps
 4. New cluster appears automatically in the cluster dropdown
+
+
+
+## Security Framework References
+ClusterOps security scanning is built on the most widely adopted US Government and industry Kubernetes security frameworks, providing automated analysis aligned with federal compliance requirements. These frameworks represent the current gold standard for securing containerized workloads in government and enterprise environments, and are referenced by both the Department of Energy (DOE) and Department of Defense (DOD) for container security guidance.
+Frameworks used in ClusterOps security scans:
+
+NSA/CISA Kubernetes Hardening Guide (2022) — Published jointly by the National Security Agency and Cybersecurity and Infrastructure Security Agency, this guide provides specific technical recommendations for hardening Kubernetes clusters against malicious actors. It covers pod security, network separation, authentication, audit logging, and upgrade practices. ClusterOps pod, network, and RBAC scans directly reference controls from this guide.
+NIST SP 800-190 — Application Container Security Guide — Published by the National Institute of Standards and Technology, this publication addresses security concerns associated with container technologies across the full lifecycle including images, registries, orchestrators, containers, and host operating systems. It is referenced by both DOE and DOD container security policies.
+
+CIS Kubernetes Benchmark v1.8 — Published by the Center for Internet Security, this benchmark provides consensus-based security configuration guidelines for Kubernetes. It is widely adopted across government agencies and maps directly to NIST controls. ClusterOps uses CIS benchmark checks as the basis for pod security, namespace, and node security scanning.
+
+NIST SP 800-53 Rev 5 — The catalog of security and privacy controls for federal information systems. ClusterOps RBAC scanning references relevant access control (AC) and least privilege controls from this publication when analyzing role bindings and service account permissions.
+
+

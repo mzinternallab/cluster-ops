@@ -234,20 +234,29 @@ pub async fn run_kubectl(
     // injected after "kubectl" but before any pipes or redirects
     let full_command = inject_kubectl_flags(&command, &kubectl, &source_file, &context_name);
 
-    // Run through system shell so pipes, grep, etc. work
-    let output = if cfg!(windows) {
-        tokio::process::Command::new("cmd")
-            .args(["/C", &full_command])
-            .output()
-            .await
-            .map_err(|e| format!("shell error: {e}"))?
-    } else {
-        tokio::process::Command::new("sh")
-            .args(["-c", &full_command])
-            .output()
-            .await
-            .map_err(|e| format!("shell error: {e}"))?
-    };
+    // Run through system shell so pipes, grep, etc. work.
+    // PowerShell is used on Windows instead of cmd to avoid buffering
+    // issues with piped commands. Wrapped in a 30-second timeout to
+    // prevent infinite hangs.
+    let output = tokio::time::timeout(
+        std::time::Duration::from_secs(30),
+        async {
+            if cfg!(windows) {
+                tokio::process::Command::new("powershell")
+                    .args(["-NoProfile", "-NonInteractive", "-Command", &full_command])
+                    .output()
+                    .await
+            } else {
+                tokio::process::Command::new("sh")
+                    .args(["-c", &full_command])
+                    .output()
+                    .await
+            }
+        },
+    )
+    .await
+    .map_err(|_| "Command timed out after 30 seconds".to_string())?
+    .map_err(|e| format!("shell error: {e}"))?;
 
     let stdout = String::from_utf8_lossy(&output.stdout).to_string();
     let stderr = String::from_utf8_lossy(&output.stderr).to_string();

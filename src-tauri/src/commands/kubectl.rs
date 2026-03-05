@@ -1,5 +1,4 @@
-use std::io::Read;
-use tauri::{AppHandle, Emitter, State};
+use tauri::{AppHandle, Emitter};
 use tokio::process::Command;
 
 // ── describe_pod ──────────────────────────────────────────────────────────────
@@ -216,130 +215,110 @@ pub async fn get_node_scan_data(
 
 // ── run_kubectl ───────────────────────────────────────────────────────────────
 
-/// Runs an arbitrary kubectl command through a PTY-backed shell so that pipes,
-/// grep, awk, and other shell features work correctly.
-/// Streams output line-by-line via `command-output-line` events, then emits
-/// `command-output-done`.
 #[tauri::command]
 pub async fn run_kubectl(
     app: AppHandle,
     command: String,
     source_file: String,
     context_name: String,
-    state: State<'_, crate::PtyState>,
 ) -> Result<(), String> {
-    // Clear any previous PTY writer so stale exec sessions don't linger.
-    {
-        let mut guard = state.0.lock().map_err(|e| e.to_string())?;
-        *guard = None;
-    }
-
     let kubectl = which::which("kubectl")
         .map(|p| p.to_string_lossy().to_string())
         .unwrap_or_else(|_| "kubectl".to_string());
 
-    // Build full command with kubeconfig flags injected before any pipes.
-    let full_cmd = inject_kubectl_flags(&command, &kubectl, &source_file, &context_name);
+    // Strip leading "kubectl" if present
+    let cmd_body = command.trim()
+        .trim_start_matches("kubectl")
+        .trim();
 
-    // portable-pty is synchronous — open the PTY and spawn inside spawn_blocking.
-    let (reader, child, slave) = tokio::task::spawn_blocking(move || {
-        let pty_system = portable_pty::native_pty_system();
-        let pty_pair = pty_system
-            .openpty(portable_pty::PtySize {
-                rows: 24,
-                cols: 220,
-                pixel_width: 0,
-                pixel_height: 0,
-            })
+    // Split on first pipe if present
+    let (kubectl_part, pipe_part) = if let Some(idx) = cmd_body.find(" | ") {
+        (&cmd_body[..idx], Some(cmd_body[idx + 3..].trim()))
+    } else {
+        (cmd_body, None)
+    };
+
+    // Parse kubectl args
+    let mut args: Vec<String> = kubectl_part
+        .split_whitespace()
+        .map(|s| s.to_string())
+        .collect();
+    args.push(format!("--kubeconfig={source_file}"));
+    args.push(format!("--context={context_name}"));
+
+    // Run kubectl directly
+    let output = tokio::time::timeout(
+        tokio::time::Duration::from_secs(30),
+        tokio::process::Command::new(&kubectl)
+            .args(&args)
+            .output()
+    ).await
+    .map_err(|_| "Command timed out after 30 seconds".to_string())?
+    .map_err(|e| format!("kubectl error: {e}"))?;
+
+    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+
+    // Apply pipe filter in Rust if present
+    let final_output = if let Some(pipe_cmd) = pipe_part {
+        apply_pipe(stdout.trim(), pipe_cmd)
+    } else {
+        stdout
+    };
+
+    for line in final_output.lines() {
+        app.emit("command-output-line", line.to_string())
             .map_err(|e| e.to_string())?;
-
-        // Run through the system shell so pipes/redirects are handled natively.
-        // KUBECONFIG env var is also set so kubectl finds the right cluster.
-        let mut cmd = if cfg!(windows) {
-            let mut c = portable_pty::CommandBuilder::new("cmd");
-            c.args(["/C", &full_cmd]);
-            c
-        } else {
-            let mut c = portable_pty::CommandBuilder::new("sh");
-            c.args(["-c", &full_cmd]);
-            c
-        };
-        cmd.env("KUBECONFIG", &source_file);
-
-        let child = pty_pair
-            .slave
-            .spawn_command(cmd)
-            .map_err(|e| format!("spawn failed: {e}"))?;
-
-        let reader = pty_pair
-            .master
-            .try_clone_reader()
-            .map_err(|e| e.to_string())?;
-
-        // Move slave out so the reader closure can keep it alive.
-        let slave = pty_pair.slave;
-
-        Ok::<_, String>((reader, child, slave))
-    })
-    .await
-    .map_err(|e| e.to_string())??;
-
-    // Stream PTY output to the frontend line-by-line.
-    // child and slave are moved in to keep the process and PTY fd alive.
-    let app_clone = app.clone();
-    tokio::task::spawn_blocking(move || {
-        let _child = child;
-        let _slave = slave;
-        let mut reader = reader;
-        let mut buf = [0u8; 4096];
-        loop {
-            match reader.read(&mut buf) {
-                Ok(0) => break,
-                Ok(n) => {
-                    let data = String::from_utf8_lossy(&buf[..n]).to_string();
-                    for line in data.lines() {
-                        let _ = app_clone.emit("command-output-line", line.to_string());
-                    }
-                }
-                Err(_) => break,
-            }
+    }
+    if !stderr.is_empty() {
+        for line in stderr.lines() {
+            app.emit("command-output-error", line.to_string())
+                .map_err(|e| e.to_string())?;
         }
-        let _ = app_clone.emit("command-output-done", ());
-    });
-
+    }
+    app.emit("command-output-done", ())
+        .map_err(|e| e.to_string())?;
     Ok(())
 }
 
-// Inject --kubeconfig and --context flags into the kubectl
-// portion of the command, before any pipe or redirect.
-// Handles: "kubectl get pods | grep foo"
-// Becomes: "/path/to/kubectl get pods --kubeconfig=X --context=Y | grep foo"
-fn inject_kubectl_flags(
-    command: &str,
-    kubectl: &str,
-    source_file: &str,
-    context_name: &str,
-) -> String {
-    let flags = format!(
-        "--kubeconfig={} --context={}",
-        source_file, context_name
-    );
+fn apply_pipe(input: &str, pipe_cmd: &str) -> String {
+    let p = pipe_cmd.trim();
 
-    // Strip leading "kubectl" from command
-    let stripped = command
-        .trim()
-        .trim_start_matches("kubectl ")
-        .trim_start_matches("kubectl");
-
-    // Find the first pipe or redirect in the stripped command
-    let pipe_pos = stripped.find(" | ")
-        .or_else(|| stripped.find(" > "))
-        .or_else(|| stripped.find(" >> "));
-
-    if let Some(p) = pipe_pos {
-        let (before_pipe, after_pipe) = stripped.split_at(p);
-        format!("{} {} {} {}", kubectl, before_pipe, flags, after_pipe)
-    } else {
-        format!("{} {} {}", kubectl, stripped, flags)
+    if let Some(pat) = p.strip_prefix("grep -v ") {
+        let pat = pat.trim().trim_matches('\'').trim_matches('"');
+        return input.lines()
+            .filter(|l| !l.contains(pat))
+            .collect::<Vec<_>>().join("\n");
     }
+    if let Some(pat) = p.strip_prefix("grep -i ") {
+        let pat = pat.trim().trim_matches('\'').trim_matches('"').to_lowercase();
+        return input.lines()
+            .filter(|l| l.to_lowercase().contains(&pat))
+            .collect::<Vec<_>>().join("\n");
+    }
+    if let Some(pat) = p.strip_prefix("grep ") {
+        let pat = pat.trim().trim_matches('\'').trim_matches('"');
+        return input.lines()
+            .filter(|l| l.contains(pat))
+            .collect::<Vec<_>>().join("\n");
+    }
+    if let Some(n) = p.strip_prefix("tail -") {
+        if let Ok(n) = n.trim().parse::<usize>() {
+            let lines: Vec<&str> = input.lines().collect();
+            return lines[lines.len().saturating_sub(n)..].join("\n");
+        }
+    }
+    if let Some(n) = p.strip_prefix("head -") {
+        if let Ok(n) = n.trim().parse::<usize>() {
+            return input.lines().take(n)
+                .collect::<Vec<_>>().join("\n");
+        }
+    }
+    if p == "wc -l" {
+        return input.lines().count().to_string();
+    }
+
+    // Unsupported pipe — show output with note
+    format!("{}\n\n[ClusterOps: '{}' not supported. Use: grep, grep -v, grep -i, tail -n, head -n, wc -l]",
+        input, pipe_cmd)
 }

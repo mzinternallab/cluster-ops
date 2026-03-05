@@ -59,6 +59,8 @@ pub fn run() {
             commands::ai::analyze_rbac_scan,
             commands::ai::analyze_namespace_scan,
             commands::ai::analyze_node_scan,
+            commands::ai::get_ai_provider_name,
+            commands::ai::ask_ai,
         ])
         .build(tauri::generate_context!())
         .expect("error while running tauri application")

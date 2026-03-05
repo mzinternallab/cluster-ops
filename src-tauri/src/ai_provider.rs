@@ -109,10 +109,29 @@ impl AiClient {
         prompt: String,
         app: &tauri::AppHandle,
     ) -> Result<(), String> {
+        let messages = vec![serde_json::json!({ "role": "user", "content": prompt })];
+        self.chat_with_events(messages, app, "ai-stream", "ai-done").await
+    }
+
+    /// Like `chat` but accepts a full messages array (for multi-turn conversations)
+    /// and custom event names for the stream/done events.
+    pub async fn chat_with_events(
+        &self,
+        messages: Vec<serde_json::Value>,
+        app: &tauri::AppHandle,
+        stream_event: &str,
+        done_event: &str,
+    ) -> Result<(), String> {
         match self.config.provider {
-            AiProvider::Anthropic            => self.chat_anthropic(prompt, app).await,
-            AiProvider::OpenAI | AiProvider::Azure => self.chat_openai_compat(prompt, app).await,
-            AiProvider::Ollama               => self.chat_ollama(prompt, app).await,
+            AiProvider::Anthropic => {
+                self.chat_anthropic(messages, app, stream_event, done_event).await
+            }
+            AiProvider::OpenAI | AiProvider::Azure => {
+                self.chat_openai_compat(messages, app, stream_event, done_event).await
+            }
+            AiProvider::Ollama => {
+                self.chat_ollama(messages, app, stream_event, done_event).await
+            }
         }
     }
 
@@ -121,8 +140,10 @@ impl AiClient {
 
     async fn chat_anthropic(
         &self,
-        prompt: String,
+        messages: Vec<serde_json::Value>,
         app: &tauri::AppHandle,
+        stream_event: &str,
+        done_event: &str,
     ) -> Result<(), String> {
         let api_key = self.config.api_key.as_deref()
             .ok_or("API key not set")?;
@@ -131,7 +152,7 @@ impl AiClient {
             "model":      self.config.model,
             "max_tokens": 4096,
             "stream":     true,
-            "messages":   [{ "role": "user", "content": prompt }],
+            "messages":   messages,
         });
 
         let mut response = self.client
@@ -157,7 +178,7 @@ impl AiClient {
                             if let Ok(json) = serde_json::from_str::<serde_json::Value>(data) {
                                 if let Some(delta) = json["delta"]["text"].as_str() {
                                     buffer.push_str(delta);
-                                    app.emit("ai-stream", delta).map_err(|e| e.to_string())?;
+                                    app.emit(stream_event, delta).map_err(|e| e.to_string())?;
                                 }
                             }
                         }
@@ -166,7 +187,7 @@ impl AiClient {
             }
         }
 
-        app.emit("ai-done", &buffer).map_err(|e| e.to_string())?;
+        app.emit(done_event, &buffer).map_err(|e| e.to_string())?;
         Ok(())
     }
 
@@ -175,8 +196,10 @@ impl AiClient {
 
     async fn chat_openai_compat(
         &self,
-        prompt: String,
+        messages: Vec<serde_json::Value>,
         app: &tauri::AppHandle,
+        stream_event: &str,
+        done_event: &str,
     ) -> Result<(), String> {
         let api_key = self.config.api_key.as_deref()
             .ok_or("API key not set")?;
@@ -193,7 +216,7 @@ impl AiClient {
         let body = serde_json::json!({
             "model":    self.config.model,
             "stream":   true,
-            "messages": [{ "role": "user", "content": prompt }],
+            "messages": messages,
         });
 
         // Azure uses `api-key` header; OpenAI uses Bearer token.
@@ -226,7 +249,7 @@ impl AiClient {
                             if let Ok(json) = serde_json::from_str::<serde_json::Value>(data) {
                                 if let Some(delta) = json["choices"][0]["delta"]["content"].as_str() {
                                     buffer.push_str(delta);
-                                    app.emit("ai-stream", delta).map_err(|e| e.to_string())?;
+                                    app.emit(stream_event, delta).map_err(|e| e.to_string())?;
                                 }
                             }
                         }
@@ -235,7 +258,7 @@ impl AiClient {
             }
         }
 
-        app.emit("ai-done", &buffer).map_err(|e| e.to_string())?;
+        app.emit(done_event, &buffer).map_err(|e| e.to_string())?;
         Ok(())
     }
 
@@ -244,8 +267,10 @@ impl AiClient {
 
     async fn chat_ollama(
         &self,
-        prompt: String,
+        messages: Vec<serde_json::Value>,
         app: &tauri::AppHandle,
+        stream_event: &str,
+        done_event: &str,
     ) -> Result<(), String> {
         let base = self.config.base_url.as_deref()
             .unwrap_or("http://localhost:11434");
@@ -254,7 +279,7 @@ impl AiClient {
         let body = serde_json::json!({
             "model":    self.config.model,
             "stream":   true,
-            "messages": [{ "role": "user", "content": prompt }],
+            "messages": messages,
         });
 
         let mut response = self.client
@@ -279,7 +304,7 @@ impl AiClient {
                             if let Some(content) = json["message"]["content"].as_str() {
                                 if !content.is_empty() {
                                     buffer.push_str(content);
-                                    app.emit("ai-stream", content).map_err(|e| e.to_string())?;
+                                    app.emit(stream_event, content).map_err(|e| e.to_string())?;
                                 }
                             }
                             if json["done"].as_bool().unwrap_or(false) {
@@ -291,7 +316,7 @@ impl AiClient {
             }
         }
 
-        app.emit("ai-done", &buffer).map_err(|e| e.to_string())?;
+        app.emit(done_event, &buffer).map_err(|e| e.to_string())?;
         Ok(())
     }
 }

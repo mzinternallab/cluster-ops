@@ -7,6 +7,7 @@ import { Check, Copy, RefreshCw } from 'lucide-react'
 
 import { cn } from '@/lib/utils'
 import type { AIAnalysisResponse, AIInsight } from '@/types/ai'
+import { AskAIPanel } from './AskAIPanel'
 
 // ── InsightCard ───────────────────────────────────────────────────────────────
 
@@ -70,6 +71,12 @@ export function AIPanel({ output, mode, analyzeKey = 0 }: AIPanelProps) {
   const [insights,        setInsights]        = useState<AIInsight[]>([])
   const [error,           setError]           = useState<string | null>(null)
   const [analysisCopied,  setAnalysisCopied]  = useState(false)
+  const [askLabel,        setAskLabel]        = useState('Ask AI')
+  const [showAskPanel,    setShowAskPanel]    = useState(false)
+
+  useEffect(() => {
+    invoke<string>('get_ai_provider_name').then(setAskLabel).catch(() => {})
+  }, [])
 
   const activeRef    = useRef(false)
   const unlistensRef = useRef<(() => void)[]>([])
@@ -212,6 +219,14 @@ export function AIPanel({ output, mode, analyzeKey = 0 }: AIPanelProps) {
         <div className="flex items-center gap-2">
           {!streaming && insights.length > 0 && (
             <button
+              onClick={() => setShowAskPanel(true)}
+              className="flex items-center gap-1 text-xxs bg-[#7a7adc]/20 text-[#7a7adc] border border-[#7a7adc]/40 hover:bg-[#7a7adc]/30 px-2 py-0.5 rounded transition-colors"
+            >
+              💬 {askLabel}
+            </button>
+          )}
+          {!streaming && insights.length > 0 && (
+            <button
               onClick={handleCopyAnalysis}
               className="flex items-center gap-1 text-xxs text-text-muted hover:text-text-primary transition-colors"
               title="Copy analysis"
@@ -272,6 +287,14 @@ export function AIPanel({ output, mode, analyzeKey = 0 }: AIPanelProps) {
           <InsightCard key={i} insight={insight} />
         ))}
       </div>
+
+      {showAskPanel && (
+        <AskAIPanel
+          rawOutput={output}
+          mode={mode as 'describe' | 'logs' | 'security' | 'network-scan' | 'rbac-scan'}
+          onClose={() => setShowAskPanel(false)}
+        />
+      )}
     </div>
   )
 }

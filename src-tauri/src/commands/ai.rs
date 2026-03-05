@@ -3,6 +3,69 @@
 use tauri::AppHandle;
 use crate::ai_provider::{AiClient, AiConfig};
 
+// ── get_ai_provider_name ──────────────────────────────────────────────────────
+
+#[tauri::command]
+pub fn get_ai_provider_name() -> String {
+    let provider = std::env::var("AI_PROVIDER")
+        .unwrap_or_else(|_| "anthropic".to_string())
+        .to_lowercase();
+
+    match provider.as_str() {
+        "anthropic" => "Ask Claude".to_string(),
+        "openai"    => "Ask GPT".to_string(),
+        "azure"     => "Ask GPT".to_string(),
+        "ollama"    => {
+            let model = std::env::var("AI_MODEL")
+                .unwrap_or_else(|_| "Ollama".to_string());
+            format!("Ask {}", model)
+        }
+        other => format!("Ask {}", other),
+    }
+}
+
+// ── ask_ai ────────────────────────────────────────────────────────────────────
+
+#[tauri::command]
+pub async fn ask_ai(
+    app: AppHandle,
+    raw_output: String,
+    messages: Vec<serde_json::Value>,
+    question: String,
+) -> Result<(), String> {
+    let config = AiConfig::from_env()?;
+    let ai_client = AiClient::new(config);
+
+    // The raw kubectl output is injected as context in the first message.
+    let system_context = format!(
+        "You are a Kubernetes expert assistant. The user is \
+         looking at this kubectl output and has questions about it.\n\n\
+         kubectl output:\n{}\n\n\
+         Answer questions specifically about this output. \
+         Be concise and actionable.",
+        raw_output
+    );
+
+    let mut full_messages = vec![
+        serde_json::json!({ "role": "user", "content": system_context }),
+    ];
+
+    // Append conversation history for multi-turn support.
+    for msg in &messages {
+        full_messages.push(msg.clone());
+    }
+
+    // Append the current question.
+    full_messages.push(serde_json::json!({
+        "role": "user",
+        "content": question,
+    }));
+
+    ai_client
+        .chat_with_events(full_messages, &app, "ask-ai-stream", "ask-ai-done")
+        .await
+}
+
 #[tauri::command]
 pub async fn analyze_with_ai(
     app: AppHandle,

@@ -215,7 +215,8 @@ pub async fn get_node_scan_data(
 
 // ── run_kubectl ───────────────────────────────────────────────────────────────
 
-/// Runs an arbitrary kubectl command, appending --kubeconfig and --context.
+/// Runs an arbitrary kubectl command through the system shell so that pipes,
+/// grep, and other shell features work correctly.
 /// Streams output line-by-line via `command-output-line` / `command-output-error`
 /// events, then emits `command-output-done`.
 #[tauri::command]
@@ -229,33 +230,73 @@ pub async fn run_kubectl(
         .map(|p| p.to_string_lossy().to_string())
         .unwrap_or_else(|_| "kubectl".to_string());
 
-    // Strip leading "kubectl" / "kubectl " so the user can type either form
-    let args_str = command
-        .trim()
-        .trim_start_matches("kubectl")
-        .trim_start();
+    // Build the full command string with kubeconfig and context
+    // injected after "kubectl" but before any pipes or redirects
+    let full_command = inject_kubectl_flags(&command, &kubectl, &source_file, &context_name);
 
-    let mut args = shell_words::split(args_str).map_err(|e| e.to_string())?;
-    args.push(format!("--kubeconfig={source_file}"));
-    args.push(format!("--context={context_name}"));
-
-    let output = Command::new(&kubectl)
-        .args(&args)
-        .output()
-        .await
-        .map_err(|e| format!("kubectl not found: {e}"))?;
+    // Run through system shell so pipes, grep, etc. work
+    let output = if cfg!(windows) {
+        tokio::process::Command::new("cmd")
+            .args(["/C", &full_command])
+            .output()
+            .await
+            .map_err(|e| format!("shell error: {e}"))?
+    } else {
+        tokio::process::Command::new("sh")
+            .args(["-c", &full_command])
+            .output()
+            .await
+            .map_err(|e| format!("shell error: {e}"))?
+    };
 
     let stdout = String::from_utf8_lossy(&output.stdout).to_string();
     let stderr = String::from_utf8_lossy(&output.stderr).to_string();
 
     for line in stdout.lines() {
-        app.emit("command-output-line", line).map_err(|e| e.to_string())?;
+        app.emit("command-output-line", line)
+            .map_err(|e| e.to_string())?;
     }
     if !stderr.is_empty() {
         for line in stderr.lines() {
-            app.emit("command-output-error", line).map_err(|e| e.to_string())?;
+            app.emit("command-output-error", line)
+                .map_err(|e| e.to_string())?;
         }
     }
-    app.emit("command-output-done", ()).map_err(|e| e.to_string())?;
+    app.emit("command-output-done", ())
+        .map_err(|e| e.to_string())?;
     Ok(())
+}
+
+// Inject --kubeconfig and --context flags into the kubectl
+// portion of the command, before any pipe or redirect.
+// Handles: "kubectl get pods | grep foo"
+// Becomes: "/path/to/kubectl get pods --kubeconfig=X --context=Y | grep foo"
+fn inject_kubectl_flags(
+    command: &str,
+    kubectl: &str,
+    source_file: &str,
+    context_name: &str,
+) -> String {
+    let flags = format!(
+        "--kubeconfig={} --context={}",
+        source_file, context_name
+    );
+
+    // Strip leading "kubectl" from command
+    let stripped = command
+        .trim()
+        .trim_start_matches("kubectl ")
+        .trim_start_matches("kubectl");
+
+    // Find the first pipe or redirect in the stripped command
+    let pipe_pos = stripped.find(" | ")
+        .or_else(|| stripped.find(" > "))
+        .or_else(|| stripped.find(" >> "));
+
+    if let Some(p) = pipe_pos {
+        let (before_pipe, after_pipe) = stripped.split_at(p);
+        format!("{} {} {} {}", kubectl, before_pipe, flags, after_pipe)
+    } else {
+        format!("{} {} {}", kubectl, stripped, flags)
+    }
 }

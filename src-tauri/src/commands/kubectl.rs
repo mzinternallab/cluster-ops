@@ -1,4 +1,5 @@
-use tauri::{AppHandle, Emitter};
+use std::io::Read;
+use tauri::{AppHandle, Emitter, State};
 use tokio::process::Command;
 
 // ── describe_pod ──────────────────────────────────────────────────────────────
@@ -215,64 +216,97 @@ pub async fn get_node_scan_data(
 
 // ── run_kubectl ───────────────────────────────────────────────────────────────
 
-/// Runs an arbitrary kubectl command through the system shell so that pipes,
-/// grep, and other shell features work correctly.
-/// Streams output line-by-line via `command-output-line` / `command-output-error`
-/// events, then emits `command-output-done`.
+/// Runs an arbitrary kubectl command through a PTY-backed shell so that pipes,
+/// grep, awk, and other shell features work correctly.
+/// Streams output line-by-line via `command-output-line` events, then emits
+/// `command-output-done`.
 #[tauri::command]
 pub async fn run_kubectl(
     app: AppHandle,
     command: String,
     source_file: String,
     context_name: String,
+    state: State<'_, crate::PtyState>,
 ) -> Result<(), String> {
+    // Clear any previous PTY writer so stale exec sessions don't linger.
+    {
+        let mut guard = state.0.lock().map_err(|e| e.to_string())?;
+        *guard = None;
+    }
+
     let kubectl = which::which("kubectl")
         .map(|p| p.to_string_lossy().to_string())
         .unwrap_or_else(|_| "kubectl".to_string());
 
-    // Build the full command string with kubeconfig and context
-    // injected after "kubectl" but before any pipes or redirects
-    let full_command = inject_kubectl_flags(&command, &kubectl, &source_file, &context_name);
+    // Build full command with kubeconfig flags injected before any pipes.
+    let full_cmd = inject_kubectl_flags(&command, &kubectl, &source_file, &context_name);
 
-    // Run through system shell so pipes, grep, etc. work.
-    // PowerShell is used on Windows instead of cmd to avoid buffering
-    // issues with piped commands. Wrapped in a 30-second timeout to
-    // prevent infinite hangs.
-    let output = tokio::time::timeout(
-        std::time::Duration::from_secs(30),
-        async {
-            if cfg!(windows) {
-                tokio::process::Command::new("powershell")
-                    .args(["-NoProfile", "-NonInteractive", "-Command", &full_command])
-                    .output()
-                    .await
-            } else {
-                tokio::process::Command::new("sh")
-                    .args(["-c", &full_command])
-                    .output()
-                    .await
-            }
-        },
-    )
-    .await
-    .map_err(|_| "Command timed out after 30 seconds".to_string())?
-    .map_err(|e| format!("shell error: {e}"))?;
-
-    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
-    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
-
-    for line in stdout.lines() {
-        app.emit("command-output-line", line)
+    // portable-pty is synchronous — open the PTY and spawn inside spawn_blocking.
+    let (reader, child, slave) = tokio::task::spawn_blocking(move || {
+        let pty_system = portable_pty::native_pty_system();
+        let pty_pair = pty_system
+            .openpty(portable_pty::PtySize {
+                rows: 24,
+                cols: 220,
+                pixel_width: 0,
+                pixel_height: 0,
+            })
             .map_err(|e| e.to_string())?;
-    }
-    if !stderr.is_empty() {
-        for line in stderr.lines() {
-            app.emit("command-output-error", line)
-                .map_err(|e| e.to_string())?;
+
+        // Run through the system shell so pipes/redirects are handled natively.
+        // KUBECONFIG env var is also set so kubectl finds the right cluster.
+        let mut cmd = if cfg!(windows) {
+            let mut c = portable_pty::CommandBuilder::new("cmd");
+            c.args(["/C", &full_cmd]);
+            c
+        } else {
+            let mut c = portable_pty::CommandBuilder::new("sh");
+            c.args(["-c", &full_cmd]);
+            c
+        };
+        cmd.env("KUBECONFIG", &source_file);
+
+        let child = pty_pair
+            .slave
+            .spawn_command(cmd)
+            .map_err(|e| format!("spawn failed: {e}"))?;
+
+        let reader = pty_pair
+            .master
+            .try_clone_reader()
+            .map_err(|e| e.to_string())?;
+
+        // Move slave out so the reader closure can keep it alive.
+        let slave = pty_pair.slave;
+
+        Ok::<_, String>((reader, child, slave))
+    })
+    .await
+    .map_err(|e| e.to_string())??;
+
+    // Stream PTY output to the frontend line-by-line.
+    // child and slave are moved in to keep the process and PTY fd alive.
+    let app_clone = app.clone();
+    tokio::task::spawn_blocking(move || {
+        let _child = child;
+        let _slave = slave;
+        let mut reader = reader;
+        let mut buf = [0u8; 4096];
+        loop {
+            match reader.read(&mut buf) {
+                Ok(0) => break,
+                Ok(n) => {
+                    let data = String::from_utf8_lossy(&buf[..n]).to_string();
+                    for line in data.lines() {
+                        let _ = app_clone.emit("command-output-line", line.to_string());
+                    }
+                }
+                Err(_) => break,
+            }
         }
-    }
-    app.emit("command-output-done", ())
-        .map_err(|e| e.to_string())?;
+        let _ = app_clone.emit("command-output-done", ());
+    });
+
     Ok(())
 }
 

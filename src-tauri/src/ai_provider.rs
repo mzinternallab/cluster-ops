@@ -32,11 +32,6 @@ impl AiConfig {
     /// | `AI_MODEL`      | Model name; sensible default per provider            |
     /// | `AI_BASE_URL`   | Required for azure; optional override for ollama     |
     pub fn from_env() -> Result<Self, String> {
-        eprintln!("AI_PROVIDER: {:?}", std::env::var("AI_PROVIDER"));
-        eprintln!("AI_MODEL: {:?}", std::env::var("AI_MODEL"));
-        eprintln!("AI_BASE_URL: {:?}", std::env::var("AI_BASE_URL"));
-        eprintln!("AI_API_KEY set: {}", std::env::var("AI_API_KEY").is_ok());
-
         let provider_str = std::env::var("AI_PROVIDER")
             .unwrap_or_else(|_| "anthropic".to_string())
             .to_lowercase();
@@ -222,7 +217,6 @@ impl AiClient {
         } else {
             "https://api.openai.com/v1/chat/completions".to_string()
         };
-        eprintln!("Posting to URL: {}", url);
 
         let body = serde_json::json!({
             "model":    self.config.model,
@@ -254,15 +248,12 @@ impl AiClient {
                 None => break,
                 Some(chunk) => {
                     let text = String::from_utf8_lossy(&chunk);
-                    eprintln!("SSE chunk: {}", text);
-
                     for line in text.lines() {
                         if let Some(data) = line.strip_prefix("data: ") {
                             if data.trim() == "[DONE]" { break 'outer; }
 
                             match serde_json::from_str::<serde_json::Value>(data) {
                                 Ok(json) => {
-                                    eprintln!("AI response: {:?}", json);
 
                                     // Try multiple content locations for provider compatibility:
                                     // 1. choices[0].delta.content   — standard OpenAI streaming
@@ -282,9 +273,7 @@ impl AiClient {
                                         }
                                     }
                                 }
-                                Err(e) => {
-                                    eprintln!("SSE parse error: {} — raw data: {}", e, data);
-                                }
+                                Err(_) => {}
                             }
                         }
                     }

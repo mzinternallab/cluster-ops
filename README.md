@@ -153,6 +153,69 @@ Then reload: `source ~/.bashrc`
 
 ---
 
+## Connecting to ORNL Forerunner AI
+
+ORNL operates an internal AI platform (Forerunner) running at https://forerunner.ornl.gov powered by Open WebUI. ClusterOps can use this internal model instead of external AI providers.
+
+### Getting Your API Key
+
+1. Navigate to https://forerunner.ornl.gov and log in with your ORNL credentials
+2. Click your profile icon → Settings → Account
+3. Scroll to the API Keys section
+4. Click "Create new secret key" and copy the key
+
+### Windows (PowerShell)
+
+Run the following commands in PowerShell, replacing `your-secret-key-here` with your actual key:
+
+```powershell
+[System.Environment]::SetEnvironmentVariable("AI_PROVIDER", "openai", "User")
+[System.Environment]::SetEnvironmentVariable("AI_MODEL", "AMD.llama-4-maverick", "User")
+[System.Environment]::SetEnvironmentVariable("AI_API_KEY", "your-secret-key-here", "User")
+[System.Environment]::SetEnvironmentVariable("AI_BASE_URL", "https://forerunner.ornl.gov/api", "User")
+```
+
+Close and reopen PowerShell after setting these variables, then restart ClusterOps.
+
+### macOS / Linux
+
+Add the following to your `~/.bashrc` or `~/.zshrc`:
+
+```bash
+export AI_PROVIDER=openai
+export AI_MODEL=AMD.llama-4-maverick
+export AI_API_KEY=your-secret-key-here
+export AI_BASE_URL=https://forerunner.ornl.gov/api
+```
+
+Then run:
+
+```bash
+source ~/.bashrc   # or source ~/.zshrc
+```
+
+### Verifying the Connection
+
+To verify the connection works before starting ClusterOps, run this curl command:
+
+```bash
+curl -X POST "https://forerunner.ornl.gov/api/chat/completions" \
+  -H "Authorization: Bearer your-secret-key-here" \
+  -H "Content-Type: application/json" \
+  -d '{"model": "AMD.llama-4-maverick", "messages": [{"role": "user", "content": "hello"}], "stream": false}'
+```
+
+A successful response will return a JSON object with `choices` containing the model response.
+
+### Notes
+
+- `AI_PROVIDER` is set to `openai` because ORNL Forerunner uses an OpenAI-compatible API format
+- The default model is `AMD.llama-4-maverick`
+- Your secret key is specific to your ORNL account
+- Contact the ORNL AI team if you need access or have authentication issues
+
+---
+
 ## Kubeconfig Setup
 
 Place kubeconfig files in `~/.kube/` named `config.<clustername>`:

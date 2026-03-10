@@ -193,6 +193,7 @@ impl AiClient {
 
     // ── OpenAI / Azure ────────────────────────────────────────────────────────
     // SSE stream; delta token at data.choices[0].delta.content
+    // Also handles Open WebUI and other non-standard response formats.
 
     async fn chat_openai_compat(
         &self,
@@ -243,13 +244,36 @@ impl AiClient {
                 None => break,
                 Some(chunk) => {
                     let text = String::from_utf8_lossy(&chunk);
+                    eprintln!("SSE chunk: {}", text);
+
                     for line in text.lines() {
                         if let Some(data) = line.strip_prefix("data: ") {
                             if data.trim() == "[DONE]" { break 'outer; }
-                            if let Ok(json) = serde_json::from_str::<serde_json::Value>(data) {
-                                if let Some(delta) = json["choices"][0]["delta"]["content"].as_str() {
-                                    buffer.push_str(delta);
-                                    app.emit(stream_event, delta).map_err(|e| e.to_string())?;
+
+                            match serde_json::from_str::<serde_json::Value>(data) {
+                                Ok(json) => {
+                                    eprintln!("AI response: {:?}", json);
+
+                                    // Try multiple content locations for provider compatibility:
+                                    // 1. choices[0].delta.content   — standard OpenAI streaming
+                                    // 2. choices[0].message.content — non-streaming / Open WebUI
+                                    // 3. message.content            — Ollama-compatible format
+                                    // 4. content                    — direct content field
+                                    let delta = json["choices"][0]["delta"]["content"].as_str()
+                                        .or_else(|| json["choices"][0]["message"]["content"].as_str())
+                                        .or_else(|| json["message"]["content"].as_str())
+                                        .or_else(|| json["content"].as_str());
+
+                                    if let Some(delta) = delta {
+                                        if !delta.is_empty() {
+                                            buffer.push_str(delta);
+                                            app.emit(stream_event, delta)
+                                                .map_err(|e| e.to_string())?;
+                                        }
+                                    }
+                                }
+                                Err(e) => {
+                                    eprintln!("SSE parse error: {} — raw data: {}", e, data);
                                 }
                             }
                         }
@@ -258,7 +282,12 @@ impl AiClient {
             }
         }
 
-        app.emit(done_event, &buffer).map_err(|e| e.to_string())?;
+        if buffer.is_empty() {
+            let msg = "No content received from provider — check SSE logs for parse errors";
+            app.emit(done_event, msg).map_err(|e| e.to_string())?;
+        } else {
+            app.emit(done_event, &buffer).map_err(|e| e.to_string())?;
+        }
         Ok(())
     }
 

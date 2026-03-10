@@ -32,6 +32,11 @@ impl AiConfig {
     /// | `AI_MODEL`      | Model name; sensible default per provider            |
     /// | `AI_BASE_URL`   | Required for azure; optional override for ollama     |
     pub fn from_env() -> Result<Self, String> {
+        eprintln!("AI_PROVIDER: {:?}", std::env::var("AI_PROVIDER"));
+        eprintln!("AI_MODEL: {:?}", std::env::var("AI_MODEL"));
+        eprintln!("AI_BASE_URL: {:?}", std::env::var("AI_BASE_URL"));
+        eprintln!("AI_API_KEY set: {}", std::env::var("AI_API_KEY").is_ok());
+
         let provider_str = std::env::var("AI_PROVIDER")
             .unwrap_or_else(|_| "anthropic".to_string())
             .to_lowercase();
@@ -205,14 +210,19 @@ impl AiClient {
         let api_key = self.config.api_key.as_deref()
             .ok_or("API key not set")?;
 
-        // Azure uses the full AI_BASE_URL; OpenAI uses the standard endpoint.
+        // Azure requires AI_BASE_URL; OpenAI uses it as an override when set
+        // (e.g. to point at Open WebUI or another compatible endpoint),
+        // otherwise falls back to the standard OpenAI endpoint.
         let url = if matches!(self.config.provider, AiProvider::Azure) {
             self.config.base_url.as_deref()
                 .ok_or("AI_BASE_URL is required for azure")?
                 .to_string()
+        } else if let Some(base) = self.config.base_url.as_deref() {
+            base.to_string()
         } else {
             "https://api.openai.com/v1/chat/completions".to_string()
         };
+        eprintln!("chat_openai_compat url: {}", url);
 
         let body = serde_json::json!({
             "model":    self.config.model,

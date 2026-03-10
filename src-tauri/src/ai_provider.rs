@@ -218,11 +218,11 @@ impl AiClient {
                 .ok_or("AI_BASE_URL is required for azure")?
                 .to_string()
         } else if let Some(base) = self.config.base_url.as_deref() {
-            base.to_string()
+            format!("{}/chat/completions", base.trim_end_matches('/'))
         } else {
             "https://api.openai.com/v1/chat/completions".to_string()
         };
-        eprintln!("chat_openai_compat url: {}", url);
+        eprintln!("Posting to URL: {}", url);
 
         let body = serde_json::json!({
             "model":    self.config.model,

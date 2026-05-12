@@ -171,14 +171,22 @@ impl AiClient {
             match response.chunk().await.map_err(|e| e.to_string())? {
                 None => break,
                 Some(chunk) => {
+                    eprintln!("RAW CHUNK: {:?}", chunk);
                     let text = String::from_utf8_lossy(&chunk);
                     for line in text.lines() {
                         if let Some(data) = line.strip_prefix("data: ") {
                             if data.trim() == "[DONE]" { break 'outer; }
-                            if let Ok(json) = serde_json::from_str::<serde_json::Value>(data) {
-                                if let Some(delta) = json["delta"]["text"].as_str() {
-                                    buffer.push_str(delta);
-                                    app.emit(stream_event, delta).map_err(|e| e.to_string())?;
+                            match serde_json::from_str::<serde_json::Value>(data) {
+                                Ok(json) => {
+                                    if let Some(delta) = json["delta"]["text"].as_str() {
+                                        eprintln!("EXTRACTED TEXT: {:?}", delta);
+                                        buffer.push_str(delta);
+                                        app.emit(stream_event, delta).map_err(|e| e.to_string())?;
+                                    }
+                                }
+                                Err(parse_error) => {
+                                    eprintln!("JSON PARSE FAILED: {:?}", parse_error);
+                                    eprintln!("FAILED ON TEXT: {:?}", data);
                                 }
                             }
                         }
@@ -187,6 +195,7 @@ impl AiClient {
             }
         }
 
+        eprintln!("FULL RESPONSE: {:?}", buffer);
         app.emit(done_event, &buffer).map_err(|e| e.to_string())?;
         Ok(())
     }
@@ -247,6 +256,7 @@ impl AiClient {
             match response.chunk().await.map_err(|e| e.to_string())? {
                 None => break,
                 Some(chunk) => {
+                    eprintln!("RAW CHUNK: {:?}", chunk);
                     let text = String::from_utf8_lossy(&chunk);
                     for line in text.lines() {
                         if let Some(data) = line.strip_prefix("data: ") {
@@ -265,6 +275,7 @@ impl AiClient {
                                         .or_else(|| json["message"]["content"].as_str())
                                         .or_else(|| json["content"].as_str());
 
+                                    eprintln!("EXTRACTED TEXT: {:?}", delta);
                                     if let Some(delta) = delta {
                                         if !delta.is_empty() {
                                             buffer.push_str(delta);
@@ -273,7 +284,10 @@ impl AiClient {
                                         }
                                     }
                                 }
-                                Err(_) => {}
+                                Err(parse_error) => {
+                                    eprintln!("JSON PARSE FAILED: {:?}", parse_error);
+                                    eprintln!("FAILED ON TEXT: {:?}", data);
+                                }
                             }
                         }
                     }
@@ -281,6 +295,7 @@ impl AiClient {
             }
         }
 
+        eprintln!("FULL RESPONSE: {:?}", buffer);
         if buffer.is_empty() {
             let msg = "No content received from provider — check SSE logs for parse errors";
             app.emit(done_event, msg).map_err(|e| e.to_string())?;
@@ -324,19 +339,27 @@ impl AiClient {
             match response.chunk().await.map_err(|e| e.to_string())? {
                 None => break,
                 Some(chunk) => {
+                    eprintln!("RAW CHUNK: {:?}", chunk);
                     let text = String::from_utf8_lossy(&chunk);
                     for line in text.lines() {
                         let line = line.trim();
                         if line.is_empty() { continue; }
-                        if let Ok(json) = serde_json::from_str::<serde_json::Value>(line) {
-                            if let Some(content) = json["message"]["content"].as_str() {
-                                if !content.is_empty() {
-                                    buffer.push_str(content);
-                                    app.emit(stream_event, content).map_err(|e| e.to_string())?;
+                        match serde_json::from_str::<serde_json::Value>(line) {
+                            Ok(json) => {
+                                if let Some(content) = json["message"]["content"].as_str() {
+                                    eprintln!("EXTRACTED TEXT: {:?}", content);
+                                    if !content.is_empty() {
+                                        buffer.push_str(content);
+                                        app.emit(stream_event, content).map_err(|e| e.to_string())?;
+                                    }
+                                }
+                                if json["done"].as_bool().unwrap_or(false) {
+                                    break 'outer;
                                 }
                             }
-                            if json["done"].as_bool().unwrap_or(false) {
-                                break 'outer;
+                            Err(parse_error) => {
+                                eprintln!("JSON PARSE FAILED: {:?}", parse_error);
+                                eprintln!("FAILED ON TEXT: {:?}", line);
                             }
                         }
                     }
@@ -344,6 +367,7 @@ impl AiClient {
             }
         }
 
+        eprintln!("FULL RESPONSE: {:?}", buffer);
         app.emit(done_event, &buffer).map_err(|e| e.to_string())?;
         Ok(())
     }

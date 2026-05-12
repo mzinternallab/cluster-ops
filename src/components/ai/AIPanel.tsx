@@ -120,12 +120,14 @@ export function AIPanel({ output, mode, analyzeKey = 0 }: AIPanelProps) {
             // Return as-is and let JSON.parse fail with a useful error
             return raw.trim()
           }
-          const cleanJson = extractJson(e.payload)
+          const rawText = e.payload
+          const cleanJson = extractJson(rawText)
           try {
             const parsed: AIAnalysisResponse = JSON.parse(cleanJson)
             setInsights(parsed.insights ?? [])
           } catch (err) {
-            console.error('[ai] parse failed. raw:', e.payload)
+            console.error('[ai] parse failed. raw:', rawText)
+            console.error("Failed to parse AI response:", rawText)
             setError('Failed to parse AI response — check console for details')
           }
         }),
